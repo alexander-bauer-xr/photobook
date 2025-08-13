@@ -1,0 +1,127 @@
+<?php
+// app/Services/LayoutTemplates.php
+
+namespace App\Services;
+
+/**
+ * Catalog of page templates.
+ * Each template defines normalized slots (x,y,w,h in 0..1) and an optional target aspect (ar).
+ * Use absolute positioning + <img style="object-fit: cover"> so photos never skew.
+ */
+final class LayoutTemplates
+{
+    /** Normalized gutter between slots (as a fraction of page) */
+    public const G = 0.012;
+
+    /**
+     * Templates grouped by number of photos on a page.
+     *
+     * @return array<int, array<int, array{id:string,slots:array<int,array{x:float,y:float,w:float,h:float,ar:float|null}>>>>
+     */
+    public static function all(): array
+    {
+        $g = self::G;
+
+        return [
+            // 1 photo
+            1 => [[
+                'id' => '1/full-bleed',
+                'slots' => [
+                    ['x'=>0.0, 'y'=>0.0, 'w'=>1.0, 'h'=>1.0, 'ar'=>null], // any aspect
+                ],
+            ]],
+
+            // 2 photos
+            2 => [
+                [
+                    'id' => '2/split-vertical',
+                    'slots' => [
+                        ['x'=>0.0,        'y'=>0.0, 'w'=>0.5 - $g/2, 'h'=>1.0, 'ar'=>0.75], // portrait-ish
+                        ['x'=>0.5 + $g/2, 'y'=>0.0, 'w'=>0.5 - $g/2, 'h'=>1.0, 'ar'=>0.75],
+                    ],
+                ],
+                [
+                    'id' => '2/split-horizontal',
+                    'slots' => [
+                        ['x'=>0.0, 'y'=>0.0,              'w'=>1.0, 'h'=>0.5 - $g/2, 'ar'=>1.6], // landscape-ish
+                        ['x'=>0.0, 'y'=>0.5 + $g/2,       'w'=>1.0, 'h'=>0.5 - $g/2, 'ar'=>1.6],
+                    ],
+                ],
+                [
+                    'id' => '2/hero+sidebar',
+                    'slots' => [
+                        ['x'=>0.0,           'y'=>0.0, 'w'=>0.66 - $g/2, 'h'=>1.0, 'ar'=>1.4], // hero
+                        ['x'=>0.66 + $g/2,   'y'=>0.0, 'w'=>0.34,        'h'=>1.0, 'ar'=>0.75],
+                    ],
+                ],
+            ],
+
+            // 3 photos
+            3 => [
+                [
+                    'id' => '3/mosaic-L+S+S',
+                    'slots' => [
+                        ['x'=>0.0,           'y'=>0.0, 'w'=>0.66 - $g/2, 'h'=>1.0,            'ar'=>1.4],
+                        ['x'=>0.66 + $g/2,   'y'=>0.0, 'w'=>0.34,        'h'=>0.5 - $g/2,     'ar'=>1.0],
+                        ['x'=>0.66 + $g/2,   'y'=>0.5 + $g/2, 'w'=>0.34, 'h'=>0.5 - $g/2,     'ar'=>1.0],
+                    ],
+                ],
+                [
+                    'id' => '3/stacked-rows',
+                    'slots' => [
+                        ['x'=>0.0, 'y'=>0.0,             'w'=>1.0, 'h'=>0.45,           'ar'=>1.6],
+                        ['x'=>0.0, 'y'=>0.45 + $g,       'w'=>1.0, 'h'=>0.25,           'ar'=>1.6],
+                        ['x'=>0.0, 'y'=>0.70 + 2*$g,     'w'=>1.0, 'h'=>0.30 - 2*$g,    'ar'=>1.6],
+                    ],
+                ],
+            ],
+
+            // 4 photos
+            4 => [
+                [
+                    'id' => '4/quad',
+                    'slots' => [
+                        ['x'=>0.0,          'y'=>0.0,           'w'=>0.5 - $g/2, 'h'=>0.5 - $g/2, 'ar'=>1.0],
+                        ['x'=>0.5 + $g/2,   'y'=>0.0,           'w'=>0.5 - $g/2, 'h'=>0.5 - $g/2, 'ar'=>1.0],
+                        ['x'=>0.0,          'y'=>0.5 + $g/2,    'w'=>0.5 - $g/2, 'h'=>0.5 - $g/2, 'ar'=>1.0],
+                        ['x'=>0.5 + $g/2,   'y'=>0.5 + $g/2,    'w'=>0.5 - $g/2, 'h'=>0.5 - $g/2, 'ar'=>1.0],
+                    ],
+                ],
+                [
+                    'id' => '4/hero-row',
+                    'slots' => [
+                        ['x'=>0.0,          'y'=>0.0,           'w'=>1.0,        'h'=>0.55 - $g/2, 'ar'=>1.6],
+                        ['x'=>0.0,          'y'=>0.55 + $g/2,   'w'=>0.33 - $g/2,'h'=>0.45 - $g/2, 'ar'=>0.75],
+                        ['x'=>0.33 + $g/2,  'y'=>0.55 + $g/2,   'w'=>0.34 - $g/2,'h'=>0.45 - $g/2, 'ar'=>1.0],
+                        ['x'=>0.67 + $g/2,  'y'=>0.55 + $g/2,   'w'=>0.33,       'h'=>0.45 - $g/2, 'ar'=>0.75],
+                    ],
+                ],
+            ],
+
+            // 5 photos
+            5 => [[
+                'id' => '5/hero+grid2x2',
+                'slots' => [
+                    ['x'=>0.0,           'y'=>0.0,           'w'=>1.0,          'h'=>0.55 - $g/2, 'ar'=>1.6], // hero
+                    ['x'=>0.0,           'y'=>0.55 + $g/2,   'w'=>0.5 - $g/2,   'h'=>0.225 - $g/2, 'ar'=>1.6],
+                    ['x'=>0.5 + $g/2,    'y'=>0.55 + $g/2,   'w'=>0.5 - $g/2,   'h'=>0.225 - $g/2, 'ar'=>1.6],
+                    ['x'=>0.0,           'y'=>0.78 + $g/2,   'w'=>0.5 - $g/2,   'h'=>0.22,         'ar'=>1.6],
+                    ['x'=>0.5 + $g/2,    'y'=>0.78 + $g/2,   'w'=>0.5 - $g/2,   'h'=>0.22,         'ar'=>1.6],
+                ],
+            ]],
+
+            // 6 photos
+            6 => [[
+                'id' => '6/grid-3x2',
+                'slots' => [
+                    ['x'=>0.0,           'y'=>0.0,           'w'=>1/3 - $g/2, 'h'=>0.5 - $g/2, 'ar'=>1.0],
+                    ['x'=>1/3 + $g/2,    'y'=>0.0,           'w'=>1/3 - $g,   'h'=>0.5 - $g/2, 'ar'=>1.0],
+                    ['x'=>2/3 + $g/2,    'y'=>0.0,           'w'=>1/3 - $g/2, 'h'=>0.5 - $g/2, 'ar'=>1.0],
+                    ['x'=>0.0,           'y'=>0.5 + $g/2,    'w'=>1/3 - $g/2, 'h'=>0.5 - $g/2, 'ar'=>1.0],
+                    ['x'=>1/3 + $g/2,    'y'=>0.5 + $g/2,    'w'=>1/3 - $g,   'h'=>0.5 - $g/2, 'ar'=>1.0],
+                    ['x'=>2/3 + $g/2,    'y'=>0.5 + $g/2,    'w'=>1/3 - $g/2, 'h'=>0.5 - $g/2, 'ar'=>1.0],
+                ],
+            ]],
+        ];
+    }
+}
