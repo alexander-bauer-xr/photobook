@@ -22,6 +22,8 @@ class PhotoBookController extends Controller
                 'paper' => Config::get('photobook.paper'),
                 'orientation' => Config::get('photobook.orientation', 'landscape'),
                 'dpi' => Config::get('photobook.dpi'),
+                'title' => Config::get('photobook.cover.title'),
+                'subtitle' => Config::get('photobook.cover.subtitle'),
             ],
             'show_form' => true,
         ]);
@@ -35,6 +37,9 @@ class PhotoBookController extends Controller
             'orientation' => $request->string('orientation', Config::get('photobook.orientation', 'landscape'))->toString(),
             'dpi'    => (int) $request->input('dpi', 150),
             'force_refresh' => (bool) $request->boolean('force_refresh'),
+            // Cover overrides
+            'title' => $request->has('title') ? $request->string('title')->toString() : null,
+            'subtitle' => $request->has('subtitle') ? $request->string('subtitle')->toString() : null,
         ]);
 
         return back()->with('status', 'Build started. Check logs.');

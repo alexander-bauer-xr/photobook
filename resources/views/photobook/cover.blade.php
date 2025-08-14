@@ -13,6 +13,12 @@ Create a minimal cover with title/subtitle and today's date if configured.
         <label>Nextcloud folder:
             <input type="text" name="folder" value="{{ $defaults['folder'] }}" style="width:320px;">
         </label>
+        <label>Titel:
+            <input type="text" name="title" value="{{ $defaults['title'] }}" style="width:320px;">
+        </label>
+        <label>Subtitle:
+            <input type="text" name="subtitle" value="{{ $defaults['subtitle'] }}" style="width:320px;">
+        </label>
         <label>Paper:
             <select name="paper">
                 <option value="a4" {{ $defaults['paper']=='a4'?'selected':'' }}>A4</option>
@@ -21,7 +27,7 @@ Create a minimal cover with title/subtitle and today's date if configured.
         </label>
         <label>Orientation:
             <select name="orientation">
-                @php($ori = config('photobook.orientation','landscape'))
+                @php($ori = $defaults['orientation'] ?? config('photobook.orientation','landscape'))
                 <option value="portrait" {{ $ori=='portrait'?'selected':'' }}>Portrait</option>
                 <option value="landscape" {{ $ori=='landscape'?'selected':'' }}>Landscape</option>
             </select>
@@ -39,8 +45,18 @@ Create a minimal cover with title/subtitle and today's date if configured.
 
 <div class="page" style="align-items:center; justify-content:center;">
     <div style="text-align:center;">
-        <h1 style="margin:0;">{{ config('photobook.cover.title') }}</h1>
-        <p style="margin:.5em 0 0;">{{ config('photobook.cover.subtitle') }}</p>
+        @php(
+            $coverTitle = (isset($options) && trim((string)($options['title'] ?? '')) !== '')
+                ? ($options['title'] ?? '')
+                : config('photobook.cover.title')
+        )
+        @php(
+            $coverSubtitle = (isset($options) && trim((string)($options['subtitle'] ?? '')) !== '')
+                ? ($options['subtitle'] ?? '')
+                : config('photobook.cover.subtitle')
+        )
+        <h1 style="margin:0;">{{ $coverTitle }}</h1>
+        <p style="margin:.5em 0 0;">{{ $coverSubtitle }}</p>
         @if (config('photobook.cover.show_date'))
             <p style="margin-top:2em; font-size: 10pt;">{{ now()->toDateString() }}</p>
         @endif

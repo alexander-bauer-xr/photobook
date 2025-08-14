@@ -16,8 +16,13 @@ use League\Flysystem\FilesystemOperator;
  */
 class ImageProbe
 {
-    public function __construct(private FilesystemOperator $disk, private ?WebDavClient $dav = null) {
+    public function __construct(
+        private FilesystemOperator $disk,
+        private ?WebDavClient $dav = null,
+        private ?FeatureRepository $features = null,
+    ) {
         $this->dav ??= new WebDavClient();
+        $this->features ??= app(FeatureRepository::class);
     }
 
     /** @param PhotoDto[] $photos */
@@ -52,8 +57,76 @@ class ImageProbe
                         }
                     }
                     if (!$bytes) return null;
+                    // Try quick size detection from initial chunk
                     $info = @getimagesizefromstring($bytes);
                     $w = $info[0] ?? null; $h = $info[1] ?? null;
+                    // If unknown, escalate: detect mime, fetch larger chunk, or try Imagick
+                    if (!$w || !$h) {
+                        $mime = null;
+                        if (function_exists('finfo_open')) {
+                            try {
+                                $f = finfo_open(FILEINFO_MIME_TYPE);
+                                if ($f) { $mime = @finfo_buffer($f, $bytes) ?: null; @finfo_close($f); }
+                            } catch (\Throwable $e) {}
+                        }
+                        $needsMore = true;
+                        // Try a larger partial (512 KB) for formats that often need more header/data
+                        if ($this->dav) {
+                            try {
+                                $resp2 = $this->dav->getPartial($p->path, 0, 524288);
+                                if (!empty($resp2['bytes'])) {
+                                    $bytes = $resp2['bytes'];
+                                    $info = @getimagesizefromstring($bytes);
+                                    $w = $info[0] ?? null; $h = $info[1] ?? null;
+                                    if ($w && $h) { $needsMore = false; }
+                                }
+                            } catch (\Throwable $e) {}
+                        }
+                        // Try Imagick if still unknown and extension available
+                        if ($needsMore && class_exists('Imagick')) {
+                            try {
+                                $im = new \Imagick();
+                                $im->readImageBlob($bytes);
+                                $w = $im->getImageWidth();
+                                $h = $im->getImageHeight();
+                                $im->clear(); $im->destroy();
+                                if ($w && $h) { $needsMore = false; }
+                            } catch (\Throwable $e) {}
+                        }
+                        // Final fallback: read a bigger chunk from the stream (up to ~2 MB)
+                        if ($needsMore) {
+                            $stream = $this->disk->readStream($p->path);
+                            if ($stream) {
+                                try {
+                                    $buf = '';
+                                    $limit = 2*1024*1024; // 2 MB
+                                    while (!feof($stream) && strlen($buf) < $limit) {
+                                        $chunk = fread($stream, 131072); // 128 KB
+                                        if ($chunk === false) break;
+                                        if ($chunk !== '') $buf .= $chunk;
+                                    }
+                                    if ($buf !== '') {
+                                        $bytes = $buf;
+                                        $info = @getimagesizefromstring($bytes);
+                                        $w = $info[0] ?? null; $h = $info[1] ?? null;
+                                        if (!$w || !$h) {
+                                            if (class_exists('Imagick')) {
+                                                try {
+                                                    $im = new \Imagick();
+                                                    $im->readImageBlob($bytes);
+                                                    $w = $im->getImageWidth();
+                                                    $h = $im->getImageHeight();
+                                                    $im->clear(); $im->destroy();
+                                                } catch (\Throwable $e) {}
+                                            }
+                                        }
+                                    }
+                                } finally {
+                                    if (is_resource($stream)) @fclose($stream);
+                                }
+                            }
+                        }
+                    }
                     $takenAt = null;
             if (function_exists('exif_read_data')) {
                         $exif = @exif_read_data('data://image/jpeg;base64,'.base64_encode($bytes), 'EXIF', true, false);
@@ -75,6 +148,22 @@ class ImageProbe
                     // Simple quality score: normalized by megapixels and partial bytes seen
                     $mp = ($w && $h) ? ($w*$h/1000000.0) : 0.0;
                     $q = $mp > 0 ? min(1.0, 0.5 + 0.5*min($mp/12.0, 1.0)) : 0.0; // 0..1, favoring >=12MP
+
+                    // Compute tiny-ML features (PHP-only) if enabled
+                    if (config('photobook.ml.enable')) {
+                        $feat = [];
+                        if (config('photobook.ml.sharpness')) {
+                            $feat['sharpness'] = $this->laplacianVariance($bytes);
+                        }
+                        if (config('photobook.ml.phash')) {
+                            $feat['phash'] = $this->phashHex64($bytes);
+                        }
+                        if (!empty($feat)) {
+                            try { $this->features?->upsert($p->path, $feat); } catch (\Throwable $e) {
+                                \Log::debug('Probe: feature upsert failed', ['path'=>$p->path, 'err'=>$e->getMessage()]);
+                            }
+                        }
+                    }
                     return [
                         'w' => $w, 'h' => $h,
                         'takenAt' => $takenAt?->format(DATE_ATOM),
@@ -112,5 +201,100 @@ class ImageProbe
             'secs' => round(microtime(true) - $start, 2),
         ]);
         return $out;
+    }
+
+    private function laplacianVariance(string $bytes): ?float
+    {
+        $im = @imagecreatefromstring($bytes);
+        if (!$im) return null;
+        $w = imagesx($im); $h = imagesy($im);
+        $scale = 256 / max(1, max($w, $h));
+        if ($scale < 1) {
+            $nw = max(1, (int)($w*$scale)); $nh = max(1, (int)($h*$scale));
+            $tmp = imagecreatetruecolor($nw, $nh);
+            imagecopyresampled($tmp, $im, 0,0,0,0, $nw,$nh, $w,$h);
+            imagedestroy($im); $im = $tmp; $w=$nw; $h=$nh;
+        }
+        $sum=0.0; $sum2=0.0; $n=0;
+        for ($y=1; $y<$h-1; $y++) {
+            for ($x=1; $x<$w-1; $x++) {
+                $c = $this->grayAt($im,$x,$y)*4
+                   - $this->grayAt($im,$x-1,$y)
+                   - $this->grayAt($im,$x+1,$y)
+                   - $this->grayAt($im,$x,$y-1)
+                   - $this->grayAt($im,$x,$y+1);
+                $sum += $c; $sum2 += $c*$c; $n++;
+            }
+        }
+        if ($n <= 1) { imagedestroy($im); return null; }
+        $mean = $sum/$n; $var = max(0.0, ($sum2/$n) - ($mean*$mean));
+        imagedestroy($im);
+        return $var;
+    }
+
+    private function grayAt($im, int $x, int $y): float
+    {
+        $rgb = imagecolorat($im, $x, $y);
+        $r = ($rgb >> 16) & 255; $g = ($rgb >> 8) & 255; $b = $rgb & 255;
+        return 0.299*$r + 0.587*$g + 0.114*$b;
+    }
+
+    private function phashHex64(string $bytes): ?string
+    {
+        $im = @imagecreatefromstring($bytes);
+        if (!$im) return null;
+        $tmp = imagecreatetruecolor(32, 32);
+        imagecopyresampled($tmp, $im, 0,0,0,0, 32,32, imagesx($im), imagesy($im));
+        imagedestroy($im);
+        $px = [];
+        for ($y=0; $y<32; $y++) {
+            for ($x=0; $x<32; $x++) {
+                $px[$y*32+$x] = $this->grayAt($tmp, $x, $y);
+            }
+        }
+        imagedestroy($tmp);
+        $dct = function($N, $arr) {
+            $out = array_fill(0, $N, 0.0);
+            for ($u=0; $u<$N; $u++) {
+                $sum = 0.0;
+                for ($x=0; $x<$N; $x++) {
+                    $sum += $arr[$x] * cos((M_PI*$u*(2*$x+1))/(2*$N));
+                }
+                $alpha = ($u==0) ? sqrt(1.0/$N) : sqrt(2.0/$N);
+                $out[$u] = $alpha * $sum;
+            }
+            return $out;
+        };
+        // Row DCT then column DCT for top-left 8x8
+        $rows = [];
+        for ($y=0; $y<32; $y++) { $rows[$y] = $dct(32, array_slice($px, $y*32, 32)); }
+        $block = [];
+        for ($u=0; $u<8; $u++) {
+            $col = [];
+            for ($y=0; $y<32; $y++) { $col[] = $rows[$y][$u]; }
+            $block[$u] = $dct(32, $col);
+        }
+        $vals = [];
+        for ($v=0; $v<8; $v++) {
+            for ($u=0; $u<8; $u++) {
+                if ($u==0 && $v==0) continue;
+                $vals[] = $block[$u][$v];
+            }
+        }
+        sort($vals);
+        $median = $vals[(int) floor(count($vals)/2)] ?? 0.0;
+        $hex = '';
+        $acc = 0; $bitsInAcc = 0;
+        for ($i=0; $i<64; $i++) {
+            $u = $i % 8; $v = (int) floor($i/8);
+            $val = ($u==0 && $v==0) ? 0 : $block[$u][$v];
+            $bit = ($val > $median) ? 1 : 0;
+            $acc = ($acc << 1) | $bit; $bitsInAcc++;
+            if ($bitsInAcc === 4) {
+                $hex .= dechex($acc & 0xF);
+                $acc = 0; $bitsInAcc = 0;
+            }
+        }
+        return str_pad($hex, 16, '0');
     }
 }

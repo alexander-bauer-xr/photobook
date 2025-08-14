@@ -20,7 +20,7 @@ body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-seri
 </style>
 </head>
 <body>
-@include('photobook.cover')
+@include('photobook.cover', ['options' => $options])
 
 @foreach($pages as $page)
     @if(($page['template'] ?? '') === 'generic')

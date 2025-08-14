@@ -33,7 +33,7 @@ class PhotoBookBuilder
             @mkdir($imagesDir, 0775, true);
         }
 
-        // Collect unique photos by path
+    // Collect unique photos by path
         $unique = [];
         foreach ($pages as $page) {
             foreach ($page['photos'] as $p) {
@@ -232,6 +232,18 @@ class PhotoBookBuilder
             ]);
         }
 
+    // Build feature map (faces/saliency) once for focal points
+        $featMap = [];
+        try {
+            if (config('photobook.ml.enable') && (config('photobook.ml.faces') || config('photobook.ml.saliency'))) {
+                $featMap = app(\App\Services\FeatureRepository::class)->getMany(array_keys($unique));
+        \Log::info('Builder: features fetched', ['available' => is_array($featMap) ? count($featMap) : 0]);
+            }
+        } catch (\Throwable $e) {
+            \Log::debug('Builder: feature fetch skipped', ['err' => $e->getMessage()]);
+            $featMap = [];
+        }
+
         // After we have $map and before rendering HTML, compute per-slot images
         [$pagePxW, $pagePxH] = $this->pagePixels(
             $options['paper'] ?? config('photobook.paper'),
@@ -240,6 +252,7 @@ class PhotoBookBuilder
         );
         $opt = config('photobook.optimize', []);
     $focalCache = [];
+    $cntFaces = 0; $cntSaliency = 0; $cntFallback = 0;
     foreach ($pages as &$page) {
             $slots = $page['slots'] ?? [];
             if (!$slots) continue;
@@ -262,16 +275,56 @@ class PhotoBookBuilder
                 $file = realpath($slotLocal) ?: $slotLocal;
                 $it['src'] = 'file:///' . str_replace('\\', '/', $file);
                 // Determine focal point (0..1) once per source and set CSS object-position
-                if (!isset($focalCache[$origLocal])) {
-                    $focalCache[$origLocal] = $this->detectFocalPointForFile($origLocal);
+                // Respect planner-provided objectPosition if it is meaningful (not default "50% 50%")
+                $hasPlannerPos = isset($it['objectPosition']) && trim((string)$it['objectPosition']) !== '' && trim((string)$it['objectPosition']) !== '50% 50%';
+                if (!$hasPlannerPos) {
+                    $used = false;
+                    // 1) If ML features (faces/saliency) available for this path, prefer them
+                    $feat = $featMap[$p->path] ?? null;
+                    if ($feat) {
+                        if (config('photobook.ml.enable') && config('photobook.ml.faces') && !empty($feat->faces) && is_array($feat->faces)) {
+                            $faces = $feat->faces;
+                            usort($faces, function($A,$B){
+                                $a = (float) (($A['w'] ?? 0) * ($A['h'] ?? 0));
+                                $b = (float) (($B['w'] ?? 0) * ($B['h'] ?? 0));
+                                return $b <=> $a;
+                            });
+                            $cx = (float) ($faces[0]['cx'] ?? 0.5);
+                            $cy = (float) ($faces[0]['cy'] ?? 0.5);
+                            $cx = max(0.0, min(1.0, $cx));
+                            $cy = max(0.0, min(1.0, $cy));
+                            $it['objectPosition'] = ((int) round($cx * 100)) . '% ' . ((int) round($cy * 100)) . '%';
+                            $used = true; $cntFaces++;
+                        } elseif (config('photobook.ml.enable') && config('photobook.ml.saliency') && !empty($feat->saliency) && is_array($feat->saliency)) {
+                            $cx = (float) ($feat->saliency['cx'] ?? 0.5);
+                            $cy = (float) ($feat->saliency['cy'] ?? 0.5);
+                            $cx = max(0.0, min(1.0, $cx));
+                            $cy = max(0.0, min(1.0, $cy));
+                            $it['objectPosition'] = ((int) round($cx * 100)) . '% ' . ((int) round($cy * 100)) . '%';
+                            $used = true; $cntSaliency++;
+                        }
+                    }
+                    // 2) Fallback to EXIF SubjectArea / entropy
+                    if (!$used) {
+                        if (!isset($focalCache[$origLocal])) {
+                            $focalCache[$origLocal] = $this->detectFocalPointForFile($origLocal);
+                        }
+                        [$fx, $fy] = $focalCache[$origLocal];
+                        $it['objectPosition'] = ((int) round($fx * 100)) . '% ' . ((int) round($fy * 100)) . '%';
+                        $cntFallback++;
+                    }
                 }
-                [$fx, $fy] = $focalCache[$origLocal];
-                $it['objectPosition'] = ((int) round($fx * 100)) . '% ' . ((int) round($fy * 100)) . '%';
                 $items[] = $it;
             }
             $page['items'] = $items;
         }
         unset($page);
+
+        \Log::info('Builder: focal source summary', [
+            'faces' => $cntFaces,
+            'saliency' => $cntSaliency,
+            'fallback' => $cntFallback,
+        ]);
 
         // Helper for Blade to build file:// URLs that Dompdf can read
         $asset_url = function ($photo) use ($map) {

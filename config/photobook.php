@@ -101,7 +101,7 @@ return [
         'saliency'  => env('PHOTOBOOK_ML_SALIENCY', false),
         'horizon'   => env('PHOTOBOOK_ML_HORIZON', false),
 
-        // Sidecar command (absolute or in PATH)
-        'sidecar'   => env('PHOTOBOOK_ML_SIDECAR', 'python3 ml_extract.py'),
+    // Sidecar command (absolute or in PATH). On Windows, 'python' is typical.
+    'sidecar'   => env('PHOTOBOOK_ML_SIDECAR', 'python ml_extract.py'),
     ],
 ];

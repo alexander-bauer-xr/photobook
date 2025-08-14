@@ -7,7 +7,12 @@ use App\DTO\PhotoDto;
 
 final class LayoutPlannerV2
 {
-    public function __construct(private LayoutTemplates $templates = new LayoutTemplates()) {}
+    public function __construct(
+        private LayoutTemplates $templates = new LayoutTemplates(),
+        private ?FeatureRepository $featRepo = null,
+    ) {
+        $this->featRepo ??= app(FeatureRepository::class);
+    }
 
     /**
      * @param PhotoDto[] $photosPage photos for one page (<= 6 ideal)
@@ -189,6 +194,35 @@ final class LayoutPlannerV2
         }
         if ($mismatchCount >= max(2, (int) floor($n/2))) {
             $total += $divPenalty;
+        }
+
+        // PHP-only ML: prefer sharper image for largest slot if enabled
+        if (config('photobook.ml.enable') && config('photobook.ml.sharpness') && $this->featRepo) {
+            try {
+                $largestIdx = $heroJ;
+                // Find which photo got that slot
+                $photoIdxForLargest = array_search($largestIdx, $assignIdx, true);
+                if ($photoIdxForLargest !== false) {
+                    $paths = array_map(fn($p)=>$p->path, $photos);
+                    $featMap = $this->featRepo->getMany($paths);
+                    $sharp = 0.0;
+                    $p = $photos[$photoIdxForLargest];
+                    $f = $featMap[$p->path] ?? null;
+                    if ($f && $f->sharpness) {
+                        $sharp = log(1.0 + max(0.0, (float)$f->sharpness));
+                        $total -= min(0.3, $sharp/20.0); // small bonus
+                    }
+                    // Sidecar ML: if aesthetic score is available, add a tiny bonus too
+                    if ($f && isset($f->aesthetic) && is_numeric($f->aesthetic)) {
+                        $a = max(0.0, min(10.0, (float) $f->aesthetic));
+                        // center around ~5; scale gently so it doesn't dominate
+                        $delta = ($a - 5.0) / 50.0; // ~[-0.1, +0.1]
+                        $total -= $delta;
+                    }
+                }
+            } catch (\Throwable $e) {
+                // ignore
+            }
         }
 
         // Lower total => better; convert to score

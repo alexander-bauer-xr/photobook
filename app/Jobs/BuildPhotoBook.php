@@ -2,7 +2,7 @@
 
 namespace App\Jobs;
 
-use App\Services\{NextcloudPhotoRepository, ImageProbe, LayoutPlanner, PhotoBookBuilder, PdfRenderer, PageGrouper, LayoutPlannerV2, LayoutTemplates};
+use App\Services\{NextcloudPhotoRepository, ImageProbe, LayoutPlanner, PhotoBookBuilder, PdfRenderer, PageGrouper, LayoutPlannerV2, LayoutTemplates, FeatureRepository};
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -78,6 +78,37 @@ class BuildPhotoBook implements ShouldQueue
             $tb = $b->takenAt?->getTimestamp() ?? PHP_INT_MIN;
             return $ta <=> $tb ?: strcmp($a->filename, $b->filename);
         });
+
+        // Optional dedupe burst by pHash within small time windows
+    if (config('photobook.ml.enable') && config('photobook.ml.phash') && \Illuminate\Support\Facades\Schema::hasTable('photo_features')) {
+            $featRepo = app(FeatureRepository::class);
+            $paths = array_map(fn($p)=>$p->path, $photos);
+            $features = $featRepo->getMany($paths);
+            $filtered = [];
+            $window = 30; // seconds
+            for ($i=0; $i<count($photos); $i++) {
+                $keep = true;
+                $pi = $photos[$i];
+                $ph_i = $features[$pi->path]->phash ?? null;
+                for ($j=max(0,$i-5); $j<$i; $j++) {
+                    $pj = $photos[$j];
+                    $dt = abs(($pi->takenAt?->getTimestamp() ?? 0) - ($pj->takenAt?->getTimestamp() ?? 0));
+                    if ($dt > $window) continue;
+                    $ph_j = $features[$pj->path]->phash ?? null;
+                    $ham = FeatureRepository::hamming($ph_i, $ph_j);
+                    if ($ham !== null && $ham <= 5) {
+                        // prefer sharper
+                        $sh_i = (float)($features[$pi->path]->sharpness ?? 0);
+                        $sh_j = (float)($features[$pj->path]->sharpness ?? 0);
+                        if ($sh_i <= $sh_j) { $keep = false; break; } else { unset($filtered[$j]); }
+                    }
+                }
+                if ($keep) $filtered[$i] = $pi;
+            }
+            $photosBefore = count($photos);
+            $photos = array_values($filtered);
+            logger()->info('PB: dedupe by pHash', ['before'=>$photosBefore,'after'=>count($photos)]);
+        }
 
         $useV2 = (bool) ($this->options['v2'] ?? true);
         if ($useV2) {
