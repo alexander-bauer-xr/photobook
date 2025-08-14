@@ -274,6 +274,17 @@ class PhotoBookBuilder
                 // Use file:/// for Dompdf
                 $file = realpath($slotLocal) ?: $slotLocal;
                 $it['src'] = 'file:///' . str_replace('\\', '/', $file);
+                // Build HTTP URL for review UI: /photobook/asset/{hash}/{relative}
+                $hash = sha1($folder);
+                $prefix = storage_path('app/pdf-exports/_cache/' . $hash . DIRECTORY_SEPARATOR);
+                $prefixNorm = str_replace('\\', '/', realpath($prefix) ?: $prefix);
+                $fileNorm = str_replace('\\', '/', $file);
+                if (str_starts_with($fileNorm, $prefixNorm)) {
+                    $rel = ltrim(substr($fileNorm, strlen($prefixNorm)), '/');
+                    $it['rel'] = $rel;
+                    $it['web'] = route('photobook.asset', ['hash' => $hash, 'path' => $rel]);
+                }
+
                 // Determine focal point (0..1) once per source and set CSS object-position
                 // Respect planner-provided objectPosition if it is meaningful (not default "50% 50%")
                 $hasPlannerPos = isset($it['objectPosition']) && trim((string)$it['objectPosition']) !== '' && trim((string)$it['objectPosition']) !== '50% 50%';
@@ -350,6 +361,51 @@ class PhotoBookBuilder
         ])->render();
 
         \Log::debug('Builder: html built', ['kb' => round(strlen($html) / 1024, 1)]);
+
+        // Export pages.json for debug/inspection
+        try {
+            $export = [];
+            $pageNo = 0;
+            foreach ($pages as $p) {
+                $pageNo++;
+                $outItems = [];
+        foreach (($p['items'] ?? []) as $it) {
+                    $photo = $it['photo'] ?? null;
+                    $outItems[] = [
+                        'slotIndex' => $it['slotIndex'] ?? 0,
+                        'crop' => $it['crop'] ?? 'cover',
+                        'objectPosition' => $it['objectPosition'] ?? '50% 50%',
+                        'src' => $it['src'] ?? null,
+            'web' => $it['web'] ?? null,
+            'rel' => $it['rel'] ?? null,
+                        'photo' => $photo ? [
+                            'path' => $photo->path,
+                            'filename' => $photo->filename,
+                            'width' => $photo->width,
+                            'height' => $photo->height,
+                            'ratio' => $photo->ratio,
+                            'takenAt' => $photo->takenAt?->format(DATE_ATOM),
+                        ] : null,
+                    ];
+                }
+                $export[] = [
+                    'n' => $pageNo,
+                    'template' => $p['template'] ?? null,
+                    'templateId' => $p['templateId'] ?? null,
+                    'slots' => $p['slots'] ?? [],
+                    'items' => $outItems,
+                ];
+            }
+            $pagesJson = [
+                'folder' => $folder,
+                'created_at' => date(DATE_ATOM),
+                'count' => count($export),
+                'pages' => $export,
+            ];
+            @file_put_contents($cacheRoot . DIRECTORY_SEPARATOR . 'pages.json', json_encode($pagesJson, JSON_PRETTY_PRINT));
+        } catch (\Throwable $e) {
+            \Log::debug('Builder: pages.json export failed', ['err' => $e->getMessage()]);
+        }
 
         return [$html, $imagesDir];
     }

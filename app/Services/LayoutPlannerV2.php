@@ -100,12 +100,42 @@ final class LayoutPlannerV2
             $randP = (float) ($var['pick_randomness'] ?? 0.25);
             $within = (float) ($var['second_within'] ?? 0.12);
             $chosen = $best;
+            $alternative = $second;
             if ($topK >= 2 && $second && $best['_score'] > 0) {
                 $close = (($best['_score'] - $second['_score']) / max(1e-6, abs($best['_score']))) <= $within;
                 if ($close && mt_rand() / mt_getrandmax() < $randP) {
-                    $chosen = $second;
+                    $chosen = $second; $alternative = $best;
                 }
             }
+
+            // Auto-retry if score is very low
+            if ($alternative && ($chosen['_score'] ?? -INF) < -1.5 && ($alternative['_score'] ?? -INF) > ($chosen['_score'] ?? -INF)) {
+                \Log::info('PlannerV2: low score, retry with second-best', [
+                    'chosen' => $chosen['template'], 'score' => round($chosen['_score'],3),
+                    'second' => $alternative['template'], 'second_score' => round($alternative['_score'],3)
+                ]);
+                $tmp = $chosen; $chosen = $alternative; $alternative = $tmp;
+            }
+
+            // Face crop validator: if any face would be cropped >25%, try alternative
+            try {
+                $featMap = [];
+                if (config('photobook.ml.enable') && config('photobook.ml.faces') && $this->featRepo) {
+                    $paths = array_map(fn($p)=>$p->path, $photosPage);
+                    $featMap = $this->featRepo->getMany($paths);
+                }
+                $viol = $this->hasFaceCropViolation($chosen, $photosPage, $featMap);
+                if ($viol && $alternative) {
+                    $viol2 = $this->hasFaceCropViolation($alternative, $photosPage, $featMap);
+                    if (!$viol2) {
+                        \Log::info('PlannerV2: validator rejected candidate due to face crop; using alternative', [
+                            'rejected' => $chosen['template'], 'alt' => $alternative['template']
+                        ]);
+                        $chosen = $alternative;
+                    }
+                }
+            } catch (\Throwable $e) { /* ignore validator errors */ }
+
             \Log::info('PlannerV2: chosen', ['template' => $chosen['template'], 'score' => round($chosen['_score'],3)]);
             unset($chosen['_score']);
             return $chosen;
@@ -141,21 +171,52 @@ final class LayoutPlannerV2
     $heroMiss = (float) ($b['hero_miss_penalty'] ?? 0.05);
     $divPenalty = (float) ($b['diversity_penalty'] ?? 0.15);
 
+    // Slot area fractions to weight hero-ness
+    $areas = array_map(fn($s)=>$s['w']*$s['h'], $slots);
+    $totalArea = array_sum($areas) ?: 1.0;
+    $slotAreaFrac = array_map(fn($a)=> $a / max(1e-6, $totalArea), $areas);
+
+    // Load features once (faces/aesthetic/sharpness etc.)
+    $featMap = [];
+    if (config('photobook.ml.enable') && $this->featRepo) {
+        try {
+            $paths = array_map(fn($p)=>$p->path, $photos);
+            $featMap = $this->featRepo->getMany($paths);
+        } catch (\Throwable $e) {
+            $featMap = [];
+        }
+    }
+
     // Build cost matrix (photo i -> slot j)
         $cost = array_fill(0, $n, array_fill(0, $n, 0.0));
         for ($i = 0; $i < $n; $i++) {
             $p = $photos[$i];
             $par = $this->aspect($p);
+            $pf = $featMap[$p->path] ?? null;
+            // Precompute heroiness for this photo
+            $heroinessBase = 0.0;
+            if ($pf) {
+                $faces = is_array($pf->faces ?? null) ? $pf->faces : [];
+                if (!empty($faces)) { $heroinessBase += 0.5; }
+                $aesthetic = $pf->aesthetic ?? null;
+                if (is_numeric($aesthetic)) {
+                    $heroinessBase += min(0.5, max(0.0, ((float)$aesthetic - 5.0) / 5.0));
+                }
+            }
             for ($j = 0; $j < $n; $j++) {
                 $s = $slots[$j];
                 $sar = $s['ar'] ?? $par;
-                $crop = abs($sar - $par); // lower is better
+                // Crop cost with quadratic-ish growth for extremes
+                $cropCost = abs($sar - $par);
+                $cropCost = $cropCost * (1.0 + 0.5 * $cropCost);
+                // Orientation hard mismatch (portrait vs landscape)
                 $mismatch = (($sar < 0.95 && $par > 1.2) || ($sar > 1.2 && $par < 0.95)) ? 1.0 : 0.0;
                 // Chronology: earlier (lower i) to earlier rank slot
                 $flow = abs($slotRank[$j] - $i) / max(1, $n - 1);
-                // Weighted sum
-        $cost[$i][-$j-1] = 0; // placeholder to keep numeric keys if needed
-        $cost[$i][$j] = $wCrop * $crop + $wOrient * $mismatch + $wFlow * $flow;
+                // Hero-weighted bonus by slot area fraction
+                $bonus = $heroinessBase * ($slotAreaFrac[$j] ?? 0.0) * $heroBonus;
+                // Weighted sum (bonus reduces cost)
+                $cost[$i][$j] = $wCrop * $cropCost + $wOrient * $mismatch + $wFlow * $flow - $bonus;
             }
         }
 
@@ -174,13 +235,38 @@ final class LayoutPlannerV2
             ];
         }
 
-        // Hero bonus: if earliest photo (i=0) lands in the largest area slot, reward
-        $areas = array_map(fn($s)=>$s['w']*$s['h'], $slots);
+        // Hero miss penalty: if largest slot didn't get a hero-worthy photo while a better remains
         $heroJ = array_keys($areas, max($areas))[0];
-        if (isset($assignIdx[0]) && $assignIdx[0] === $heroJ) {
-            $total -= $heroBonus; // bonus reduces cost
-        } else {
-            $total += $heroMiss; // slight penalty
+        $assignedIdxForHero = array_search($heroJ, $assignIdx, true);
+        if ($assignedIdxForHero !== false) {
+            $assignedPhoto = $photos[$assignedIdxForHero];
+            $af = $featMap[$assignedPhoto->path] ?? null;
+            $hscore = 0.0;
+            if ($af) {
+                $faces = is_array($af->faces ?? null) ? $af->faces : [];
+                if (!empty($faces)) { $hscore += 0.5; }
+                $aesthetic = $af->aesthetic ?? null;
+                if (is_numeric($aesthetic)) {
+                    $hscore += min(0.5, max(0.0, ((float)$aesthetic - 5.0) / 5.0));
+                }
+            }
+            $bestRemainingHero = 0.0;
+            // Compare against other photos on the page (exclude the one already in the largest slot)
+            for ($k = 0; $k < $n; $k++) {
+                if ($k === $assignedIdxForHero) continue;
+                $pp = $photos[$k];
+                $pf2 = $featMap[$pp->path] ?? null;
+                if (!$pf2) continue;
+                $tmp = 0.0;
+                $faces2 = is_array($pf2->faces ?? null) ? $pf2->faces : [];
+                if (!empty($faces2)) { $tmp += 0.5; }
+                $aes2 = $pf2->aesthetic ?? null;
+                if (is_numeric($aes2)) { $tmp += min(0.5, max(0.0, ((float)$aes2 - 5.0) / 5.0)); }
+                if ($tmp > $bestRemainingHero) $bestRemainingHero = $tmp;
+            }
+            if ($bestRemainingHero > $hscore + 0.25) {
+                $total += $heroMiss;
+            }
         }
 
         // Diversity: penalize repetitive mismatches
@@ -196,28 +282,19 @@ final class LayoutPlannerV2
             $total += $divPenalty;
         }
 
-        // PHP-only ML: prefer sharper image for largest slot if enabled
-        if (config('photobook.ml.enable') && config('photobook.ml.sharpness') && $this->featRepo) {
+    // PHP-only ML: prefer sharper image for largest slot if enabled (tiny)
+    if (config('photobook.ml.enable') && config('photobook.ml.sharpness') && $this->featRepo) {
             try {
                 $largestIdx = $heroJ;
                 // Find which photo got that slot
                 $photoIdxForLargest = array_search($largestIdx, $assignIdx, true);
                 if ($photoIdxForLargest !== false) {
-                    $paths = array_map(fn($p)=>$p->path, $photos);
-                    $featMap = $this->featRepo->getMany($paths);
                     $sharp = 0.0;
                     $p = $photos[$photoIdxForLargest];
                     $f = $featMap[$p->path] ?? null;
                     if ($f && $f->sharpness) {
                         $sharp = log(1.0 + max(0.0, (float)$f->sharpness));
-                        $total -= min(0.3, $sharp/20.0); // small bonus
-                    }
-                    // Sidecar ML: if aesthetic score is available, add a tiny bonus too
-                    if ($f && isset($f->aesthetic) && is_numeric($f->aesthetic)) {
-                        $a = max(0.0, min(10.0, (float) $f->aesthetic));
-                        // center around ~5; scale gently so it doesn't dominate
-                        $delta = ($a - 5.0) / 50.0; // ~[-0.1, +0.1]
-                        $total -= $delta;
+            $total -= min(0.2, $sharp/25.0); // tiny bonus
                     }
                 }
             } catch (\Throwable $e) {
@@ -242,6 +319,70 @@ final class LayoutPlannerV2
         if ($p->width && $p->height && $p->height > 0) return $p->width / $p->height;
         // default “neutral” aspect
         return 1.0;
+    }
+
+    /**
+     * Check if any assigned photo's primary face (if present with bbox) would be cropped >25%
+     * given object-fit: cover with focal point set to that face center.
+     * @param array{template:string,slots:array<int,array>,items:array<int,array>,_score?:float} $candidate
+     * @param PhotoDto[] $photosPage
+     * @param array<string,\App\Models\PhotoFeature> $featMap
+     */
+    private function hasFaceCropViolation(array $candidate, array $photosPage, array $featMap): bool
+    {
+        $slots = $candidate['slots'];
+        foreach ($candidate['items'] as $it) {
+            /** @var PhotoDto $p */
+            $p = $it['photo'];
+            $f = $featMap[$p->path] ?? null;
+            if (!$f || !is_array($f->faces ?? null) || empty($f->faces)) continue;
+            // take the largest face by (w*h) if dimensions exist
+            $faces = $f->faces;
+            usort($faces, function($A,$B){
+                $a = (float)($A['w'] ?? 0.0) * (float)($A['h'] ?? 0.0);
+                $b = (float)($B['w'] ?? 0.0) * (float)($B['h'] ?? 0.0);
+                return $b <=> $a;
+            });
+            $face = $faces[0];
+            $cx = isset($face['cx']) ? (float)$face['cx'] : 0.5;
+            $cy = isset($face['cy']) ? (float)$face['cy'] : 0.5;
+            $fw = isset($face['w']) ? (float)$face['w'] : null;
+            $fh = isset($face['h']) ? (float)$face['h'] : null;
+            if ($fw === null || $fh === null || $fw <= 0 || $fh <= 0) continue; // need bbox size to assess crop percent
+
+            $slot = $slots[$it['slotIndex']] ?? null;
+            if (!$slot) continue;
+            $par = $this->aspect($p); if ($par <= 0) continue;
+            $sar = (float)($slot['ar'] ?? $par); if ($sar <= 0) continue;
+
+            // Compute visible rect in photo space (0..1) under object-fit: cover centered at (cx,cy)
+            if ($par >= $sar) {
+                // wider than slot: crop horizontally
+                $visW = max(0.0, min(1.0, $sar / $par));
+                $x0 = max(0.0, min(1.0 - $visW, $cx - $visW/2));
+                $x1 = $x0 + $visW; $y0 = 0.0; $y1 = 1.0;
+            } else {
+                // taller than slot: crop vertically
+                $visH = max(0.0, min(1.0, $par / $sar));
+                $y0 = max(0.0, min(1.0 - $visH, $cy - $visH/2));
+                $y1 = $y0 + $visH; $x0 = 0.0; $x1 = 1.0;
+            }
+
+            // Face bbox
+            $fx0 = $cx - $fw/2; $fx1 = $cx + $fw/2;
+            $fy0 = $cy - $fh/2; $fy1 = $cy + $fh/2;
+
+            // Intersection area between visible rect and face bbox
+            $ix = max(0.0, min($x1, $fx1) - max($x0, $fx0));
+            $iy = max(0.0, min($y1, $fy1) - max($y0, $fy0));
+            $interA = $ix * $iy;
+            $faceA = max(1e-6, $fw * $fh);
+            $coverage = $interA / $faceA; // 1.0 means fully inside
+            if ($coverage < 0.75) {
+                return true; // more than 25% cropped
+            }
+        }
+        return false;
     }
 
     /** Hungarian algorithm for square cost matrix; returns assignment [row => col] minimizing total cost */

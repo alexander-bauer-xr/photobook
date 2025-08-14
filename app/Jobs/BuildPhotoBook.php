@@ -120,6 +120,8 @@ class BuildPhotoBook implements ShouldQueue
                 $choice = $plannerV2->chooseLayout($group, ['recent' => $recentTpls]);
                 $pages[] = [
                     'template' => 'generic',
+                    // keep the actual chosen template id for downstream exporters/debug
+                    'templateId' => $choice['template'] ?? null,
                     'slots' => $choice['slots'],
                     'items' => $choice['items'],
                     'photos' => $group, // keep for asset copy

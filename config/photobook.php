@@ -5,6 +5,9 @@ return [
     'orientation' => env('PHOTOBOOK_ORIENTATION', 'landscape'),    // portrait | landscape
     'dpi'         => (int) env('PHOTOBOOK_DPI', 150),              // Dompdf CSS dpi (layout)
     'margin_mm'   => (int) env('PHOTOBOOK_MARGIN_MM', 0),
+    // Inner white border inside the printable area (mm) and the gap between photos (mm)
+    'page_frame_mm' => (int) env('PHOTOBOOK_PAGE_FRAME_MM', 6),
+    'page_gap_mm'   => (float) env('PHOTOBOOK_PAGE_GAP_MM', 2.5),
 
     // Image/PDF optimization & rendering
     'optimize' => [

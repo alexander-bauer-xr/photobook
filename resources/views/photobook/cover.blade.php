@@ -41,6 +41,9 @@ Create a minimal cover with title/subtitle and today's date if configured.
         </label>
         <button type="submit">Build PDF</button>
     </form>
+    <p style="margin:8px 0;">
+        <a href="/photobook/review">Open review UI</a>
+    </p>
 @endif
 
 <div class="page" style="align-items:center; justify-content:center;">
