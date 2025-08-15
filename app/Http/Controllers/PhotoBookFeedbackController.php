@@ -24,7 +24,8 @@ class PhotoBookFeedbackController extends Controller
         }
 
         $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
-        if (!is_dir($cacheRoot)) @mkdir($cacheRoot, 0775, true);
+        if (!is_dir($cacheRoot))
+            @mkdir($cacheRoot, 0775, true);
         $file = $cacheRoot . DIRECTORY_SEPARATOR . 'feedback.log';
 
         $entry = [
@@ -36,7 +37,12 @@ class PhotoBookFeedbackController extends Controller
             'ip' => $request->ip(),
             'ua' => (string) $request->header('User-Agent'),
         ];
-        @file_put_contents($file, json_encode($entry, JSON_UNESCAPED_SLASHES) . "\n", FILE_APPEND);
+        $ok = @file_put_contents($file, json_encode($entry, JSON_UNESCAPED_SLASHES) . "\n", FILE_APPEND);
+        if ($ok === false) {
+            \Log::error('Photobook feedback save failed', ['file' => $file, 'entry' => $entry]);
+            return response()->json(['ok' => false, 'error' => 'Write failed: ' . $file], 500);
+        }
+        \Log::info('Photobook feedback saved', ['file' => $file, 'page' => $page, 'action' => $action]);
 
         return response()->json(['ok' => true]);
     }
@@ -57,7 +63,8 @@ class PhotoBookFeedbackController extends Controller
         }
 
         $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
-        if (!is_dir($cacheRoot)) @mkdir($cacheRoot, 0775, true);
+        if (!is_dir($cacheRoot))
+            @mkdir($cacheRoot, 0775, true);
         $file = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.log';
 
         $entry = [
@@ -68,8 +75,47 @@ class PhotoBookFeedbackController extends Controller
             'ip' => $request->ip(),
             'ua' => (string) $request->header('User-Agent'),
         ];
-        @file_put_contents($file, json_encode($entry, JSON_UNESCAPED_SLASHES) . "\n", FILE_APPEND);
+        $ok = @file_put_contents($file, json_encode($entry, JSON_UNESCAPED_SLASHES) . "\n", FILE_APPEND);
+        if ($ok === false) {
+            \Log::error('Photobook override save failed', ['file' => $file, 'entry' => $entry]);
+            return response()->json(['ok' => false, 'error' => 'Write failed: ' . $file], 500);
+        }
+        \Log::info('Photobook override saved', ['file' => $file, 'page' => $page, 'templateId' => $templateId]);
 
+        return response()->json(['ok' => true]);
+    }
+
+    public function listOverrides(Request $request)
+    {
+        $folder = (string) $request->input('folder', Config::get('photobook.folder'));
+        $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
+        $file = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.json';
+        $data = is_file($file) ? (json_decode(@file_get_contents($file), true) ?: ['pages' => []]) : ['pages' => []];
+        return response()->json(['ok' => true, 'data' => $data]);
+    }
+
+    public function savePage(Request $request)
+    {
+        $folder = (string) $request->input('folder', Config::get('photobook.folder'));
+        $page = (int) $request->input('page');
+        $order = (array) $request->input('order', []);   // array of photo paths in new order
+        $slots = (array) $request->input('slots', []);   // slotIndex => { pos:[fx,fy], zoom:number, path?:string }
+
+        if ($page < 1)
+            return response()->json(['ok' => false, 'error' => 'Invalid page'], 422);
+
+        $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
+        if (!is_dir($cacheRoot))
+            @mkdir($cacheRoot, 0775, true);
+        $file = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.json';
+        $data = is_file($file) ? (json_decode(@file_get_contents($file), true) ?: ['pages' => []]) : ['pages' => []];
+
+        $data['pages'][(string) $page] = [
+            'order' => $order ?: null,
+            'slots' => $slots ?: null,
+        ];
+
+        @file_put_contents($file, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         return response()->json(['ok' => true]);
     }
 }

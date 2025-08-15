@@ -25,6 +25,7 @@ class PhotoBookController extends Controller
                 'dpi' => Config::get('photobook.dpi'),
                 'title' => Config::get('photobook.cover.title'),
                 'subtitle' => Config::get('photobook.cover.subtitle'),
+                'show_date' => (bool) Config::get('photobook.cover.show_date', false),
             ],
             'show_form' => true,
         ]);
@@ -34,19 +35,20 @@ class PhotoBookController extends Controller
     {
         // Accept both GET and POST; default missing values from config
         $folder = $request->string('folder', Config::get('photobook.folder'))->toString();
-        $paper  = $request->string('paper', Config::get('photobook.paper'))->toString();
+        $paper = $request->string('paper', Config::get('photobook.paper'))->toString();
         $orientation = $request->string('orientation', Config::get('photobook.orientation', 'landscape'))->toString();
-        $dpi    = (int) $request->input('dpi', (int) Config::get('photobook.dpi', 150));
+        $dpi = (int) $request->input('dpi', (int) Config::get('photobook.dpi', 150));
 
         BuildPhotoBook::dispatch([
             'folder' => $folder,
-            'paper'  => $paper,
+            'paper' => $paper,
             'orientation' => $orientation,
-            'dpi'    => $dpi,
+            'dpi' => $dpi,
             'force_refresh' => (bool) $request->boolean('force_refresh'),
             // Cover overrides (only apply when provided)
             'title' => $request->has('title') ? $request->string('title')->toString() : null,
             'subtitle' => $request->has('subtitle') ? $request->string('subtitle')->toString() : null,
+            'cover_show_date' => $request->boolean('show_date', (bool) Config::get('photobook.cover.show_date', false)),
         ]);
 
         return back()->with('status', 'Build started. Check logs.');
@@ -100,11 +102,43 @@ class PhotoBookController extends Controller
             unset($p);
         }
 
+        // Overlay any pending template overrides so the UI reflects user's latest choices
+        try {
+            $ovFile = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.log';
+            if (is_file($ovFile)) {
+                $lines = @file($ovFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+                $overridesByPage = [];
+                foreach ($lines as $ln) {
+                    $j = json_decode($ln, true);
+                    if (!is_array($j))
+                        continue;
+                    if (!empty($j['folder']) && (string) $j['folder'] !== (string) $folder)
+                        continue;
+                    $pg = (int) ($j['page'] ?? 0);
+                    $tid = (string) ($j['templateId'] ?? '');
+                    if ($pg >= 1 && $tid !== '') {
+                        $overridesByPage[$pg] = $tid; // latest wins
+                    }
+                }
+                if (!empty($overridesByPage)) {
+                    foreach ($pages as &$p) {
+                        $n = (int) ($p['n'] ?? 0);
+                        if ($n >= 1 && isset($overridesByPage[$n])) {
+                            $p['overrideTemplateId'] = $overridesByPage[$n];
+                        }
+                    }
+                    unset($p);
+                }
+            }
+        } catch (\Throwable $e) {
+            // ignore
+        }
+
         // Build template options grouped by photo count
         $tpls = LayoutTemplates::all();
         $tplOptions = [];
         foreach ($tpls as $count => $arr) {
-            $tplOptions[(string)$count] = array_values(array_unique(array_map(fn($t) => (string)($t['id'] ?? ''), $arr)));
+            $tplOptions[(string) $count] = array_values(array_unique(array_map(fn($t) => (string) ($t['id'] ?? ''), $arr)));
         }
 
         return view('photobook.review', [
@@ -128,5 +162,17 @@ class PhotoBookController extends Controller
         }
         // Let Laravel infer content-type
         return response()->file($full);
+    }
+
+    public function pagesJson(Request $request)
+    {
+        $folder = $request->string('folder', Config::get('photobook.folder'))->toString();
+        $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
+        $pagesPath = $cacheRoot . DIRECTORY_SEPARATOR . 'pages.json';
+        if (!is_file($pagesPath))
+            return response()->json(['ok' => false, 'error' => 'pages.json not found'], 404);
+        $json = @file_get_contents($pagesPath) ?: '';
+        $data = json_decode($json, true);
+        return response()->json(['ok' => true, 'data' => $data]);
     }
 }

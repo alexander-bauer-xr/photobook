@@ -35,7 +35,8 @@ class ImageProbe
     $out = array_map(function(PhotoDto $p) use (&$i, &$dimmed, &$fail, &$exifHits, &$nameHits, &$partialUsed) {
             $idx = $i++;
             $etag = $p->etag ?? null; // present if listed via WebDAV
-            $key = 'probe:'.sha1($p->path.'|'.($etag ?: 'noetag'));
+            // Bump cache namespace (v2) to refresh isCollage after detector changes
+            $key = 'probe:v2:'.sha1($p->path.'|'.($etag ?: 'noetag'));
             $meta = Cache::remember($key, 86400, function() use ($p, $idx, &$fail, &$exifHits, &$nameHits, &$partialUsed) {
                 try {
                     // Prefer partial GET via WebDAV to avoid downloading full files
@@ -164,10 +165,31 @@ class ImageProbe
                             }
                         }
                     }
+                    // Optional 2x2 collage detector (white borders + grid)
+                    $looksCollage = false;
+                    try {
+                        // Ensure we have enough bytes to decode a thumbnail reliably (progressive JPEGs may need more)
+                        if (strlen($bytes) < 131072) {
+                            if ($this->dav) {
+                                try {
+                                    $resp3 = $this->dav->getPartial($p->path, 0, 524288);
+                                    if (!empty($resp3['bytes'])) { $bytes = $resp3['bytes']; }
+                                } catch (\Throwable $e) {}
+                            } else {
+                                $stream = $this->disk->readStream($p->path);
+                                if ($stream) {
+                                    try { $bytes = stream_get_contents($stream, 524288) ?: $bytes; } finally { if (is_resource($stream)) @fclose($stream); }
+                                }
+                            }
+                        }
+                        $looksCollage = $this->looksLikeCollage($bytes);
+                    } catch (\Throwable $e) { $looksCollage = false; }
+
                     return [
                         'w' => $w, 'h' => $h,
                         'takenAt' => $takenAt?->format(DATE_ATOM),
                         'qualityScore' => $q,
+                        'isCollage' => $looksCollage,
                     ];
                 } catch (\Throwable $e) {
                     if ($idx % 25 === 0) { \Log::debug('Probe: error', ['path' => $p->path, 'err' => $e->getMessage()]); }
@@ -189,6 +211,7 @@ class ImageProbe
                 'takenAt' => $meta['takenAt'] ? new \DateTimeImmutable($meta['takenAt']) : $p->takenAt,
                 'qualityScore' => $meta['qualityScore'] ?? $p->qualityScore,
                 'fileSize' => $p->fileSize,
+                'isCollage' => $meta['isCollage'] ?? ($p->isCollage ?? null),
             ]);
         }, $photos);
         \Log::info('Probe: done', [
@@ -296,5 +319,68 @@ class ImageProbe
             }
         }
         return str_pad($hex, 16, '0');
+    }
+    /** Heuristic: detect 2x2 collage by white outer border and central white grid lines. */
+    private function looksLikeCollage(string $bytes): bool
+    {
+        $im = @imagecreatefromstring($bytes);
+        if (!$im) {
+            // Fallback to Imagick if GD couldn't decode (e.g., progressive JPEG headers incomplete)
+            if (class_exists('Imagick')) {
+                try {
+                    $mag = new \Imagick();
+                    $mag->readImageBlob($bytes);
+                    $mag->setIteratorIndex(0);
+                    $im2 = imagecreatetruecolor( (int) $mag->getImageWidth(), (int) $mag->getImageHeight());
+                    $data = $mag->getImageBlob();
+                    @imagealphablending($im2, true);
+                    @imagesavealpha($im2, true);
+                    $tmp = @imagecreatefromstring($data);
+                    if ($tmp) { imagecopy($im2, $tmp, 0,0,0,0, imagesx($tmp), imagesy($tmp)); imagedestroy($tmp); $im = $im2; } else { imagedestroy($im2); }
+                    $mag->clear(); $mag->destroy();
+                } catch (\Throwable $e) { /* ignore */ }
+            }
+            if (!$im) return false;
+        }
+        $w = imagesx($im); $h = imagesy($im);
+        if ($w <= 0 || $h <= 0) { @imagedestroy($im); return false; }
+
+        // Downscale for speed
+        $tw = 160; $th = max(40, (int) round($h * ($tw / max(1,$w))));
+        $thumb = imagecreatetruecolor($tw, $th);
+        @imagecopyresampled($thumb, $im, 0,0,0,0, $tw,$th, $w,$h);
+        @imagedestroy($im);
+
+        $isWhite = function(int $rgb): bool {
+            $r = ($rgb>>16)&255; $g = ($rgb>>8)&255; $b = $rgb&255;
+            // allow near-white to tolerate compression; ignore alpha
+            return ($r + $g + $b) >= 3*235;
+        };
+        $borderFrac = function($img, int $thick) use ($tw,$th,$isWhite): float {
+            $cnt=0; $tot=0;
+            for ($y=0; $y<$thick; $y++) for ($x=0; $x<$tw; $x++) { $tot++; if ($isWhite(imagecolorat($img,$x,$y))) $cnt++; }
+            for ($y=$th-$thick; $y<$th; $y++) for ($x=0; $x<$tw; $x++) { $tot++; if ($isWhite(imagecolorat($img,$x,$y))) $cnt++; }
+            for ($x=0; $x<$thick; $x++) for ($y=0; $y<$th; $y++) { $tot++; if ($isWhite(imagecolorat($img,$x,$y))) $cnt++; }
+            for ($x=$tw-$thick; $x<$tw; $x++) for ($y=0; $y<$th; $y++) { $tot++; if ($isWhite(imagecolorat($img,$x,$y))) $cnt++; }
+            return $tot ? ($cnt/$tot) : 0.0;
+        };
+        $thick = max(1, (int) round(min($tw,$th)*0.035));
+        $borderPct = $borderFrac($thumb, $thick);
+
+        $lineWhiteFrac = function($img,int $x0,int $x1,int $y0,int $y1) use ($isWhite): float {
+            $cnt=0;$tot=0;
+            for($y=$y0;$y<$y1;$y++) for($x=$x0;$x<$x1;$x++){ $tot++; if($isWhite(imagecolorat($img,$x,$y))) $cnt++; }
+            return $tot?($cnt/$tot):0.0;
+        };
+        $midX = (int) round($tw/2);
+        $midY = (int) round($th/2);
+        // sample a wider band around the center to handle cropped/scaled collages
+        $band = max(2, (int) round(min($tw,$th) * 0.02));
+        $vFrac = $lineWhiteFrac($thumb, max(0,$midX-$band), min($tw,$midX+$band), 0, $th);
+        $hFrac = $lineWhiteFrac($thumb, 0, $tw, max(0,$midY-$band), min($th,$midY+$band));
+
+        if (is_resource($thumb)) @imagedestroy($thumb);
+        // Relax thresholds slightly; require strong white frame and visible grid lines
+        return ($borderPct >= 0.30) && ($vFrac >= 0.60) && ($hFrac >= 0.60);
     }
 }

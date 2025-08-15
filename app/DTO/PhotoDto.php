@@ -23,6 +23,8 @@ final class PhotoDto
     public readonly ?string $etag = null,
     public readonly ?int $fileSize = null,
     public readonly ?float $qualityScore = null,
+    // Optional smart-detector flag: true when image looks like a collage (e.g., 2x2 grid with white borders)
+    public readonly ?bool $isCollage = null,
     ) {}
 
     public static function fromArray(array $d): self
@@ -38,6 +40,7 @@ final class PhotoDto
             $d['etag'] ?? null,
             $d['fileSize'] ?? null,
             $d['qualityScore'] ?? null,
+            $d['isCollage'] ?? null,
         );
     }
 

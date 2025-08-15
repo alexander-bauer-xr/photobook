@@ -116,8 +116,83 @@ class BuildPhotoBook implements ShouldQueue
             $groups = $grouper->group($photos, 4);
             $pages = [];
             $recentTpls = [];
+            // Build bias map from prior feedback (folder-scoped)
+            $biasMap = [];
+            try {
+                $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
+                $fbFile = $cacheRoot . DIRECTORY_SEPARATOR . 'feedback.log';
+                if (is_file($fbFile)) {
+                    $lines = @file($fbFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+                    // Aggregate by template id for simple biasing; we need last built pages.json to map page->template
+                    $pagesJson = $cacheRoot . DIRECTORY_SEPARATOR . 'pages.json';
+                    $tplByPage = [];
+                    if (is_file($pagesJson)) {
+                        $pj = json_decode((string) @file_get_contents($pagesJson), true);
+                        foreach ((array)($pj['pages'] ?? []) as $pinfo) {
+                            $n = (int) ($pinfo['n'] ?? 0);
+                            $tid = (string) ($pinfo['templateId'] ?? ($pinfo['template'] ?? ''));
+                            if ($n >= 1 && $tid !== '') { $tplByPage[$n] = $tid; }
+                        }
+                    }
+                    $acc = [];
+                    foreach ($lines as $ln) {
+                        $j = json_decode($ln, true);
+                        if (!is_array($j)) continue;
+                        if (!empty($j['folder']) && (string)$j['folder'] !== (string)$folder) continue;
+                        $pg = (int) ($j['page'] ?? 0);
+                        $act = (string) ($j['action'] ?? '');
+                        $tid = $tplByPage[$pg] ?? null;
+                        if ($pg < 1 || !$tid) continue;
+                        $w = 0.0;
+                        switch ($act) {
+                            case 'like': $w = +0.10; break;
+                            case 'dislike': $w = -0.20; break;
+                            case 'faces-cropped': $w = -0.15; break;
+                            case 'too-repetitive': $w = -0.15; break;
+                            case 'low-confidence': $w = -0.05; break;
+                            default: $w = 0.0; break;
+                        }
+                        if ($w !== 0.0) {
+                            $acc[$tid] = ($acc[$tid] ?? 0.0) + $w;
+                        }
+                    }
+                    // Clamp biases to reasonable bounds
+                    foreach ($acc as $tid => $v) {
+                        $biasMap[$tid] = max(-0.6, min(0.4, $v));
+                    }
+                }
+            } catch (\Throwable $e) {
+                // ignore
+            }
+            // Load review overrides if present (latest entry for each page wins)
+            $overridesByPage = [];
+            try {
+                $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
+                $ovFile = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.log';
+                if (is_file($ovFile)) {
+                    $lines = @file($ovFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+                    foreach ($lines as $ln) {
+                        $j = json_decode($ln, true);
+                        if (!is_array($j)) continue;
+                        if (!empty($j['folder']) && (string)$j['folder'] !== (string)$folder) continue;
+                        $pg = (int) ($j['page'] ?? 0);
+                        $tid = (string) ($j['templateId'] ?? '');
+                        if ($pg >= 1 && $tid !== '') {
+                            $overridesByPage[$pg] = $tid; // latest wins by file order
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                // ignore
+            }
             foreach ($groups as $group) {
-                $choice = $plannerV2->chooseLayout($group, ['recent' => $recentTpls]);
+                $pageIndex = count($pages) + 1; // 1-based page index in review
+                $overrideTpl = $overridesByPage[$pageIndex] ?? null;
+                if ($overrideTpl) {
+                    $choice = $plannerV2->chooseLayoutWithTemplate($group, $overrideTpl);
+                } else {
+                    $choice = $plannerV2->chooseLayout($group, ['recent' => $recentTpls, 'bias' => $biasMap]);
+                }
                 $pages[] = [
                     'template' => 'generic',
                     // keep the actual chosen template id for downstream exporters/debug

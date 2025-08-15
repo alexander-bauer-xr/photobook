@@ -10,18 +10,24 @@ Create the main layout for the PDF:
 <meta charset="utf-8">
 <style>
 @page { margin: {{ (int) config('photobook.margin_mm', 0) }}mm; }
-body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:0; }
-.page { page-break-after: always; position: relative; width: 100%; height: 100%; }
-/* Uniform inner frame (white border inside the printable area) */
-:root { --page-frame-mm: {{ (int) config('photobook.page_frame_mm', 6) }}mm; }
-.page { --page-gap: {{ (float) config('photobook.page_gap_mm', 2.5) }}mm; }
-.page-inner { position:absolute; inset: var(--page-frame-mm); background:#fff; }
-/* Slots are absolutely positioned by generic template; no fixed mm height */
-.slot { position: relative; overflow: hidden; border:0; padding: calc(var(--page-gap) / 2); box-sizing: border-box; background:#fff; }
-/* Inner image fills padded slot */
-.slot > .img { width:100%; height:100%; background-size: cover; background-repeat:no-repeat; }
-/* Preserve aspect ratio in legacy page-* templates too */
-.slot img { width:100%; height:100%; object-fit: cover; }
+/* CSS variables for consistent units */
+:root {
+  --frame-mm: {{ (float) config('photobook.page_frame_mm', 6) }}mm;
+  --gap-mm:   {{ (float) config('photobook.page_gap_mm', 2.5) }}mm;
+  --eps-mm:   0.15mm;
+}
+.page { position: relative; page-break-after: always; }
+.page-inner {
+  position: absolute;
+  top: var(--frame-mm);
+  left: var(--frame-mm);
+  right: calc(var(--frame-mm) + var(--eps-mm));
+  bottom: calc(var(--frame-mm) + var(--eps-mm));
+  background:#fff;
+  overflow:hidden;
+}
+.slot { position:absolute; overflow:hidden; box-sizing:border-box; background:#fff; }
+.slot > .img { width:100%; height:100%; background-size:cover; background-repeat:no-repeat; background-origin: content-box; }
 .caption { font-size: 10pt; margin-top: 2mm; }
 </style>
 </head>

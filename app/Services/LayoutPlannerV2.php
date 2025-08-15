@@ -60,6 +60,7 @@ final class LayoutPlannerV2
         $histPenalty = (float) ($var['hist_penalty'] ?? 0.12);
         $repeatPenalty = (float) ($var['repeat_penalty'] ?? 0.25);
         $recent = array_slice((array)($context['recent'] ?? []), -((int)($var['repeat_window'] ?? 6)));
+        $biasMap = is_array($context['bias'] ?? null) ? (array)$context['bias'] : [];
         foreach ($candidates as $tpl) {
             $res = $this->scoreTemplate($tpl, $photosPage);
             // Apply histogram mismatch penalty (convert to score domain)
@@ -67,6 +68,9 @@ final class LayoutPlannerV2
             // Apply repeat penalty if same template used recently (per occurrence)
             $rep = 0; foreach ($recent as $r) { if ($r === ($tpl['id'] ?? '')) $rep++; }
             if ($rep > 0) { $score -= $repeatPenalty * $rep; }
+            // Apply external bias (e.g., user feedback)
+            $bias = (float) ($biasMap[$tpl['id']] ?? 0.0);
+            if ($bias !== 0.0) { $score += $bias; }
 
             if ($score > $bestScore) {
                 $second = $best; $secondScore = $bestScore;
@@ -146,6 +150,50 @@ final class LayoutPlannerV2
             'slots'=>LayoutTemplates::all()[1][0]['slots'],
             'items'=>[['photo'=>$photosPage[0],'slotIndex'=>0,'crop'=>'cover','objectPosition'=>'50% 50%']]
         ];
+    }
+
+    /**
+     * Force a specific template by id for this page size. If not found for N slots, falls back to normal chooseLayout.
+     * @param PhotoDto[] $photosPage
+     * @return array{template:string, slots:array<int,array>, items:array<int,array>}
+     */
+    public function chooseLayoutWithTemplate(array $photosPage, string $templateId): array
+    {
+        $n = count($photosPage);
+        $catalog = LayoutTemplates::all();
+        $group = $catalog[$n] ?? [];
+        $tpl = null;
+        foreach ($group as $t) {
+            if (($t['id'] ?? '') === $templateId) { $tpl = $t; break; }
+        }
+        if (!$tpl) {
+            \Log::info('PlannerV2: override template not found for N; falling back', ['n' => $n, 'templateId' => $templateId]);
+            return $this->chooseLayout($photosPage);
+        }
+
+        // Compute assignment for the forced template
+        $res = $this->scoreTemplate($tpl, $photosPage);
+        $chosen = [
+            'template' => $tpl['id'],
+            'slots' => $tpl['slots'],
+            'items' => $res['assign'],
+        ];
+
+        // Optional: run face-crop validator and log if violation (but keep user override)
+        try {
+            $featMap = [];
+            if (config('photobook.ml.enable') && config('photobook.ml.faces') && $this->featRepo) {
+                $paths = array_map(fn($p)=>$p->path, $photosPage);
+                $featMap = $this->featRepo->getMany($paths);
+            }
+            if ($this->hasFaceCropViolation($chosen, $photosPage, $featMap)) {
+                \Log::warning('PlannerV2: override causes face-crop violation; keeping per user override', [
+                    'template' => $tpl['id']
+                ]);
+            }
+        } catch (\Throwable $e) { /* ignore */ }
+
+        return $chosen;
     }
 
     /** @param PhotoDto[] $photos */

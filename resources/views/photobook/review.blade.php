@@ -91,14 +91,18 @@
     @php($n = (int) ($p['n'] ?? 0))
     @php($items = $p['items'] ?? [])
     @php($tplId = $p['templateId'] ?? $p['template'] ?? '')
+    @php($ovr = $p['overrideTemplateId'] ?? null)
     <div class="page">
         <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
             <div>
                 <strong>Page {{ $n }}</strong>
                 <span class="small">Template: {{ $tplId }}</span>
+                @if($ovr && $ovr !== $tplId)
+                    <span class="small" style="color:#b26;">(override pending: {{ $ovr }})</span>
+                @endif
             </div>
             <div class="controls">
-                <form method="post" action="/photobook/feedback" onsubmit="return send(event, this)">
+                <form method="post" action="{{ route('photobook.feedback', [], false) }}" onsubmit="return send(event, this)">
                     @csrf
                     <input type="hidden" name="folder" value="{{ $folder }}">
                     <input type="hidden" name="page" value="{{ $n }}">
@@ -115,7 +119,7 @@
                     <button type="submit">Send</button>
                 </form>
 
-                <form method="post" action="/photobook/override" onsubmit="return send(event, this)">
+                <form method="post" action="{{ route('photobook.override', [], false) }}" onsubmit="return send(event, this)">
                     @csrf
                     <input type="hidden" name="folder" value="{{ $folder }}">
                     <input type="hidden" name="page" value="{{ $n }}">
@@ -123,7 +127,8 @@
                         @php($count = count($items))
                         <select name="templateId">
                             @foreach(($tplOptions[(string) $count] ?? []) as $opt)
-                                <option value="{{ $opt }}" {{ $opt === $tplId ? 'selected' : '' }}>{{ $opt }}</option>
+                                @php($sel = $ovr ? ($opt === $ovr) : ($opt === $tplId))
+                                <option value="{{ $opt }}" {{ $sel ? 'selected' : '' }}>{{ $opt }}</option>
                             @endforeach
                         </select>
                     </label>
@@ -149,8 +154,22 @@
         async function send(ev, form) {
             ev.preventDefault();
             const fd = new FormData(form);
-            const res = await fetch(form.action, { method: 'POST', headers: { 'X-Requested-With': 'fetch' }, body: fd });
+            const url = form.getAttribute('action');
+            const res = await fetch(url, {
+                method: 'POST',
+                credentials: 'same-origin', // include session cookie for CSRF
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Accept': 'application/json'
+                },
+                body: fd
+            });
             try {
+                if (!res.ok) {
+                    const txt = await res.text();
+                    alert('Error ' + res.status + ': ' + txt.slice(0, 200));
+                    return false;
+                }
                 const json = await res.json();
                 alert(json.ok ? 'Saved' : (json.error || 'Error'));
             } catch (e) {

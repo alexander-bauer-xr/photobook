@@ -1,13 +1,31 @@
-{{-- Copilot prompt:
-2-up page: two equal columns.
---}}
-<div class="page" style="display:block; position:relative;">
-<div class="page-inner" style="display:flex; align-items:stretch; gap: var(--page-gap, 3mm);">
-@foreach($photos as $p)
-    <div class="slot" style="flex:1 1 0;">
-        @php $src = $asset_url($p); @endphp
-    <div class="img" aria-label="{{ $p->filename }}" style="background-image:url('{{ $src }}');background-position:center center;aspect-ratio:4/3;"></div>
+<div class="page">
+  <div class="page-inner">
+    {{-- left column --}}
+    <div class="slot"
+         style="
+           left: 0;
+           top: 0;
+           width:  calc(50% - var(--eps-mm));
+           height: calc(100% - var(--eps-mm));
+           padding: calc(var(--gap-mm)/2);
+         ">
+      @php $src = $asset_url($photos[0]); @endphp
+      <div class="img" aria-label="{{ $photos[0]->filename }}"
+           style="background-image:url('{{ $src }}'); background-position:center center;"></div>
     </div>
-@endforeach
-</div>
+
+    {{-- right column --}}
+    <div class="slot"
+         style="
+           left: 50%;
+           top:  0;
+           width:  calc(50% - var(--eps-mm));
+           height: calc(100% - var(--eps-mm));
+           padding: calc(var(--gap-mm)/2);
+         ">
+      @php $src = $asset_url($photos[1]); @endphp
+      <div class="img" aria-label="{{ $photos[1]->filename }}"
+           style="background-image:url('{{ $src }}'); background-position:center center;"></div>
+    </div>
+  </div>
 </div>

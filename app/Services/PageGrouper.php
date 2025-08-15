@@ -24,6 +24,13 @@ final class PageGrouper
         $sum = 0.0;
         $i = 0;
         foreach ($photos as $p) {
+            // If this image looks like a collage (2x2 with white borders), give it a dedicated page.
+            if (($p->isCollage ?? false) === true) {
+                if (!empty($cur)) { $pages[] = $cur; $cur = []; $sum = 0.0; }
+                $pages[] = [$p];
+                $i++;
+                continue;
+            }
             $w = $p->width ?? null; $h = $p->height ?? null;
             $ar = ($w && $h && $h > 0) ? ($w / $h) : ($p->ratio ?: 1.0);
             // Weight heuristic (tweakable):
