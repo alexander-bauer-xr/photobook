@@ -175,4 +175,39 @@ class PhotoBookController extends Controller
         $data = json_decode($json, true);
         return response()->json(['ok' => true, 'data' => $data]);
     }
+
+    /**
+     * GET /photobook/albums
+     * List available cached albums (folders) that have a pages.json in the cache root.
+     */
+    public function albums(Request $request)
+    {
+        $root = storage_path('app/pdf-exports/_cache');
+        $out = [];
+        if (is_dir($root)) {
+            $dirs = @scandir($root) ?: [];
+            foreach ($dirs as $d) {
+                if ($d === '.' || $d === '..') continue;
+                $dir = $root . DIRECTORY_SEPARATOR . $d;
+                if (!is_dir($dir)) continue;
+                $pages = $dir . DIRECTORY_SEPARATOR . 'pages.json';
+                if (!is_file($pages)) continue;
+                $json = @file_get_contents($pages) ?: '';
+                $data = json_decode($json, true);
+                if (!is_array($data)) continue;
+                $folder = (string) ($data['folder'] ?? '');
+                $count = (int) ($data['count'] ?? 0);
+                $createdAt = (string) ($data['created_at'] ?? date(DATE_ATOM, @filemtime($pages) ?: time()));
+                $out[] = [
+                    'hash' => $d,
+                    'folder' => $folder,
+                    'count' => $count,
+                    'created_at' => $createdAt,
+                ];
+            }
+        }
+        // Sort by created_at desc
+        usort($out, fn($a,$b)=>strcmp($b['created_at'] ?? '', $a['created_at'] ?? ''));
+        return response()->json(['ok'=>true, 'albums'=>$out]);
+    }
 }

@@ -15,9 +15,13 @@ async function okJson<T>(res: Response): Promise<T> {
 
 export const api = {
   async getPages(folder?: string): Promise<PagesFile | null> {
-    const resp = await fetch('/photobook/pages?folder=' + encodeURIComponent(folder || ''), { headers: { Accept: 'application/json' }});
-    if (resp.status === 404) return null;
-    return okJson<PagesFile>(resp);
+  const resp = await fetch('/photobook/pages?folder=' + encodeURIComponent(folder || ''), { headers: { Accept: 'application/json' }});
+  if (resp.status === 404) return null;
+  const json = await okJson<{ ok: boolean; data: PagesFile }>(resp);
+  return json.data ?? null;
+  },
+  async getAlbums(): Promise<{ ok: boolean; albums: { hash: string; folder: string; count: number; created_at: string }[] }> {
+    return okJson(await fetch('/photobook/albums', { headers: { Accept: 'application/json' } }));
   },
   async overrideTemplate(payload: OverridePayload) {
     return okJson<{ok: boolean}>(await fetch('/photobook/override', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)}));

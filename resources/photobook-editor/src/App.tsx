@@ -8,7 +8,7 @@ Main app:
 - drag to update objectPosition, swap reordering
 - Save -> POST /photobook/save-page
 */
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { usePages } from './hooks/usePages';
 import EditorCanvas from './components/EditorCanvas';
@@ -25,11 +25,13 @@ export default function App() {
 function Root() {
   const [folder, setFolder] = useState<string>('Alben/1');
   const [pageIdx, setPageIdx] = useState(0);
+  const [albums, setAlbums] = useState([] as {hash:string;folder:string;count:number;created_at:string}[]);
+  useEffect(()=>{ api.getAlbums().then(r=> setAlbums(r.albums || [])).catch(()=>{}); },[]);
   const q = usePages(folder);
-  const page = useMemo<PageJson|null>(() => {
+  const page = useMemo(() => {
     if (!q.data?.pages?.length) return null;
     return q.data.pages[Math.max(0, Math.min(pageIdx, q.data.pages.length-1))];
-  }, [q.data, pageIdx]);
+  }, [q.data, pageIdx]) as PageJson | null;
 
   const updateItemObjectPos = (idx:number,xPct:number,yPct:number)=>{
     if (!page) return;
@@ -73,6 +75,12 @@ function Root() {
         <header className="flex items-center gap-3">
           <input className="border border-neutral-300 rounded px-2 py-1" value={folder} onChange={e=>setFolder(e.target.value)} placeholder="Folder" />
           <button className="px-3 py-1 bg-neutral-800 text-white rounded" onClick={()=>q.refetch()}>Load</button>
+          <select aria-label="Albums" className="border border-neutral-300 rounded px-2 py-1" value={folder} onChange={e=>{ setFolder(e.target.value); setPageIdx(0); }}>
+            <option value={folder}>Select album…</option>
+            {albums.map(a=> (
+              <option key={a.hash} value={a.folder || a.hash}>{(a.folder||a.hash)} ({a.count})</option>
+            ))}
+          </select>
           <div className="flex items-center gap-2 ml-6">
             <button disabled={pageIdx<=0} className="px-3 py-1 rounded bg-neutral-200 disabled:opacity-50" onClick={()=>setPageIdx(p=>Math.max(0,p-1))}>Prev</button>
             <div className="text-sm">Page {page.n}</div>

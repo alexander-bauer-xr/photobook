@@ -23,6 +23,7 @@ Route::post('/photobook/override', [PhotoBookFeedbackController::class, 'overrid
 Route::get('/photobook/pages', [PhotoBookController::class, 'pagesJson']);        // GET ?folder=...
 Route::get('/photobook/overrides', [PhotoBookFeedbackController::class, 'listOverrides']); // GET ?folder=...
 Route::post('/photobook/save-page', [PhotoBookFeedbackController::class, 'savePage']);     // POST JSON
+Route::get('/photobook/albums', [PhotoBookController::class, 'albums']); // List cached albums (pages.json)
 // ======= PHOTOBOOK_EDITOR_UI =======
 Route::get('/photobook/editor', function () {
     return view('photobook.editor');
