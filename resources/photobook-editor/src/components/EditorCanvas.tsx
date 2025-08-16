@@ -37,8 +37,7 @@ function Filmstrip({ items, selected, onSelect, onReorder }: {
     <div className="flex gap-2 py-2 bg-neutral-100 rounded">
       {items.map((it, i) => (
         <div key={i}
-          className={`w-16 h-16 rounded overflow-hidden border ${selected === i ? 'border-blue-500' : 'border-neutral-300'} ${dragIdx === i ? 'opacity-50' : ''}`}
-          style={{ cursor: 'pointer', backgroundImage: it.src ? `url(${it.src})` : 'none', backgroundSize: 'cover', backgroundPosition: 'center' }}
+          className={`w-16 h-16 rounded overflow-hidden border cursor-pointer ${selected === i ? 'border-blue-500' : 'border-neutral-300'} ${dragIdx === i ? 'opacity-50' : ''}`}
           onPointerDown={() => setDragIdx(i)}
           onPointerUp={() => {
             if (dragIdx !== null && overIdx !== null && dragIdx !== overIdx) {
@@ -48,7 +47,9 @@ function Filmstrip({ items, selected, onSelect, onReorder }: {
           }}
           onPointerEnter={() => dragIdx !== null && setOverIdx(i)}
           onClick={() => onSelect(i)}
-        />
+        >
+          {(() => { const u = (it as any).web || (it as any).webSrc || it.src; return u ? <img src={u} alt="thumb" className="w-full h-full object-cover" /> : <div className="w-full h-full bg-neutral-200" /> })()}
+        </div>
       ))}
     </div>
   );
@@ -68,16 +69,23 @@ function useObjectPosition(initial: string) {
   return [pos, set, nudge] as const;
 }
 
-type Props = { page: PageJson; onSave: (items: PageItem[]) => void; scale?: number; };
+type Props = { page: PageJson; onSave: (items: PageItem[]) => void; scale?: number; version?: number };
 
-export default function EditorCanvas({ page, onSave, scale = 1 }: Props) {
+export default function EditorCanvas({ page, onSave, scale = 1, version = 0 }: Props) {
   const rootRef = useRef(null as HTMLDivElement | null);
-  const { selectedItemKey, setSelected } = useSelection();
+  const { setSelected } = useSelection();
   const keyFor = (i: number) => `${page.n}:${i}`;
 
   // Draft state for items
   const [draftItems, setDraftItems] = useState(() => page.items.map(it => ({ ...it, scale: it.scale ?? 1 })) as PageItem[]); // scale default 1
   const [selectedIdx, setSelectedIdx] = useState(0);
+
+  // Reset draft when page or external version changes
+  useEffect(() => {
+    setDraftItems(page.items.map(it => ({ ...it, scale: it.scale ?? 1 })) as PageItem[]);
+    setSelectedIdx(0);
+    setSelected(keyFor(0));
+  }, [page.n, version]);
 
   // Keyboard nudge handler
   useEffect(() => {
@@ -127,6 +135,26 @@ export default function EditorCanvas({ page, onSave, scale = 1 }: Props) {
     onSave(draftItems);
   };
 
+  // Inject dynamic CSS for slot positions and object-position/zoom
+  useEffect(() => {
+    const id = `page-style-${page.n}`;
+    let css = '';
+    draftItems.forEach((it, i) => {
+      const s = page.slots[it.slotIndex] || { x: 0, y: 0, w: 1, h: 1 };
+      const pos = it.objectPosition || '50% 50%';
+      const zoom = it.scale && it.scale > 0 ? it.scale : 1;
+      css += `.slot-wrap-${page.n}-${i}{left:${s.x * 100}%;top:${s.y * 100}%;width:${s.w * 100}%;height:${s.h * 100}%;}`;
+      css += `.slot-img-${page.n}-${i}{object-position:${pos};transform:scale(${zoom});transform-origin:${pos};}`;
+    });
+    let el = document.getElementById(id) as HTMLStyleElement | null;
+    if (!el) {
+      el = document.createElement('style');
+      el.id = id;
+      document.head.appendChild(el);
+    }
+    el.textContent = css;
+  }, [page.n, draftItems]);
+
   return (
     <div className="flex flex-col gap-4">
       <Filmstrip
@@ -135,7 +163,7 @@ export default function EditorCanvas({ page, onSave, scale = 1 }: Props) {
         onSelect={setSelectedIdx}
         onReorder={handleReorder}
       />
-      <div ref={rootRef} className="relative bg-white shadow border border-neutral-200" style={{ width: 900 * scale, height: 600 * scale }}>
+  <div ref={rootRef} className="relative bg-white shadow border border-neutral-200 w-[900px] h-[600px]">
         {draftItems.map((it, i) => {
           const s = page.slots[it.slotIndex] || { x: 0, y: 0, w: 1, h: 1 };
           const isSel = selectedIdx === i;
@@ -143,37 +171,38 @@ export default function EditorCanvas({ page, onSave, scale = 1 }: Props) {
           const zoom = it.scale && it.scale > 0 ? it.scale : 1;
           return (
             <div key={i}
-              className={`absolute overflow-hidden ${isSel ? 'ring-2 ring-blue-500' : 'ring-1 ring-neutral-200'}`}
-              style={{ left: `${s.x * 100}%`, top: `${s.y * 100}%`, width: `${s.w * 100}%`, height: `${s.h * 100}%` }}
-              onMouseDown={() => setSelectedIdx(i)}
+              className={`absolute overflow-hidden slot-wrap-${page.n}-${i} ${isSel ? 'ring-2 ring-blue-500' : 'ring-1 ring-neutral-200'}`}
+              onMouseDown={() => { setSelectedIdx(i); setSelected(keyFor(i)); }}
             >
-              <div className="w-full h-full"
-                style={{
-                  backgroundImage: it.src ? `url(${it.src})` : 'none',
-                  backgroundSize: zoom !== 1 ? `${100 * zoom}% auto` : (it.crop === 'contain' ? 'contain' : 'cover'),
-                  backgroundPosition: pos, backgroundRepeat: 'no-repeat', cursor: 'grab'
-                }}
-                // Drag to update objectPosition
-                onMouseDown={e => {
-                  const r = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
-                  const startX = e.clientX, startY = e.clientY;
-                  const [ox, oy] = pos.split(' ').map(s => parseFloat(s));
-                  function onMove(ev: MouseEvent) {
-                    const dx = ((ev.clientX - startX) / r.width) * 100;
-                    const dy = ((ev.clientY - startY) / r.height) * 100;
-                    setDraftItems(items => items.map((item, idx) => idx === i ? {
-                      ...item,
-                      objectPosition: `${clampPct(ox + dx)}% ${clampPct(oy + dy)}%`
-                    } : item));
-                  }
-                  function onUp() {
-                    window.removeEventListener('mousemove', onMove);
-                    window.removeEventListener('mouseup', onUp);
-                  }
-                  window.addEventListener('mousemove', onMove);
-                  window.addEventListener('mouseup', onUp);
-                }}
-              />
+              {(() => { const u = (it as any).web || (it as any).webSrc || it.src; return u ? (
+                <img
+                  src={u}
+                  alt="slot"
+                  className={`w-full h-full ${it.crop === 'contain' ? 'object-contain' : 'object-cover'} slot-img-${page.n}-${i} cursor-grab`}
+                  draggable={false}
+                  onMouseDown={e => {
+                    const r = (e.currentTarget as HTMLImageElement).getBoundingClientRect();
+                    const startX = e.clientX, startY = e.clientY;
+                    const [ox, oy] = pos.split(' ').map(s => parseFloat(s));
+                    function onMove(ev: MouseEvent) {
+                      const dx = ((ev.clientX - startX) / r.width) * 100;
+                      const dy = ((ev.clientY - startY) / r.height) * 100;
+                      setDraftItems(items => items.map((item, idx) => idx === i ? {
+                        ...item,
+                        objectPosition: `${clampPct(ox + dx)}% ${clampPct(oy + dy)}%`
+                      } : item));
+                    }
+                    function onUp() {
+                      window.removeEventListener('mousemove', onMove);
+                      window.removeEventListener('mouseup', onUp);
+                    }
+                    window.addEventListener('mousemove', onMove);
+                    window.addEventListener('mouseup', onUp);
+                  }}
+                />
+              ) : (
+                <div className="w-full h-full bg-neutral-100" />
+              )})()}
               {/* Zoom slider */}
               <div className="absolute bottom-2 left-2 bg-white/80 rounded px-2 py-1 shadow flex items-center">
                 <ZoomSlider value={zoom} onChange={v => setDraftItems(items => items.map((item, idx) => idx === i ? { ...item, scale: v } : item))} />

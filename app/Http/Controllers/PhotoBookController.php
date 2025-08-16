@@ -167,12 +167,45 @@ class PhotoBookController extends Controller
     public function pagesJson(Request $request)
     {
         $folder = $request->string('folder', Config::get('photobook.folder'))->toString();
-        $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
+        $hash = sha1($folder);
+        $cacheRoot = storage_path('app/pdf-exports/_cache/' . $hash);
         $pagesPath = $cacheRoot . DIRECTORY_SEPARATOR . 'pages.json';
         if (!is_file($pagesPath))
             return response()->json(['ok' => false, 'error' => 'pages.json not found'], 404);
         $json = @file_get_contents($pagesPath) ?: '';
         $data = json_decode($json, true);
+        if (!is_array($data)) return response()->json(['ok'=>false,'error'=>'invalid json'], 422);
+
+        // Inject webSrc per item when possible
+        try {
+            foreach (($data['pages'] ?? []) as &$p) {
+                foreach (($p['items'] ?? []) as &$it) {
+                    if (!empty($it['web'])) { // builder provided web URL
+                        $it['webSrc'] = $it['web'];
+                        continue;
+                    }
+                    if (!empty($it['rel'])) { // relative cache path
+                        $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']]);
+                        continue;
+                    }
+                    $src = (string) ($it['src'] ?? '');
+                    if ($src !== '') {
+                        $s = preg_replace('#^file:/{2,}#i', '', $src) ?? $src;
+                        $needle = '/_cache/' . $hash . '/';
+                        $pos = strpos(str_replace('\\', '/', $s), $needle);
+                        if ($pos !== false) {
+                            $rel = substr(str_replace('\\', '/', $s), $pos + strlen($needle));
+                            $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')]);
+                        }
+                    }
+                }
+                unset($it);
+            }
+            unset($p);
+        } catch (\Throwable $e) {
+            // ignore inject errors; fall back to raw src
+        }
+
         return response()->json(['ok' => true, 'data' => $data]);
     }
 
@@ -209,5 +242,73 @@ class PhotoBookController extends Controller
         // Sort by created_at desc
         usort($out, fn($a,$b)=>strcmp($b['created_at'] ?? '', $a['created_at'] ?? ''));
         return response()->json(['ok'=>true, 'albums'=>$out]);
+    }
+
+    /**
+     * GET /photobook/candidates?folder=&page=
+     * For now return a simple set of candidate photos: all photos from this page and adjacent pages as a starting point.
+     */
+    public function candidates(Request $request)
+    {
+        $folder = $request->string('folder', Config::get('photobook.folder'))->toString();
+        $pageNo = (int) $request->query('page', 0);
+        if ($pageNo < 1) return response()->json(['ok'=>false, 'error'=>'invalid page'], 422);
+
+        $hash = sha1($folder);
+        $cacheRoot = storage_path('app/pdf-exports/_cache/' . $hash);
+        $pagesPath = $cacheRoot . DIRECTORY_SEPARATOR . 'pages.json';
+        if (!is_file($pagesPath)) return response()->json(['ok'=>false, 'error'=>'pages.json not found'], 404);
+        $json = @file_get_contents($pagesPath) ?: '';
+        $data = json_decode($json, true);
+        $pages = is_array($data['pages'] ?? null) ? $data['pages'] : [];
+
+    $photos = [];
+        foreach ($pages as $p) {
+            $n = (int) ($p['n'] ?? 0);
+            if ($n >= $pageNo - 1 && $n <= $pageNo + 1) {
+                foreach (($p['items'] ?? []) as $it) {
+                    $ph = $it['photo'] ?? null;
+                    if (is_array($ph) && !empty($ph['path'])) {
+                        // Build a web-friendly URL
+                        $web = null;
+                        if (!empty($it['web'])) {
+                            $web = $it['web'];
+                        } elseif (!empty($it['rel'])) {
+                            $web = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']]);
+                        } else {
+                            $src = (string) ($it['src'] ?? '');
+                            if ($src !== '') {
+                                $s = preg_replace('#^file:/{2,}#i', '', $src) ?? $src;
+                                $needle = '/_cache/' . $hash . '/';
+                                $pos = strpos(str_replace('\\', '/', $s), $needle);
+                                if ($pos !== false) {
+                                    $rel = substr(str_replace('\\', '/', $s), $pos + strlen($needle));
+                                    $web = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')]);
+                                }
+                            }
+                        }
+                        $w = isset($ph['width']) ? (int)$ph['width'] : null;
+                        $h = isset($ph['height']) ? (int)$ph['height'] : null;
+                        $orientation = null;
+                        if ($w && $h) {
+                            if ($w > $h) $orientation = 'landscape';
+                            elseif ($w < $h) $orientation = 'portrait';
+                            else $orientation = 'square';
+                        }
+                        $photos[$ph['path']] = [
+                            'path' => $ph['path'],
+                            'filename' => $ph['filename'] ?? basename($ph['path']),
+                            'src' => $web,
+                            'width' => $w,
+                            'height' => $h,
+                            'ratio' => $ph['ratio'] ?? null,
+                            'takenAt' => $ph['takenAt'] ?? null,
+                            'orientation' => $orientation,
+                        ];
+                    }
+                }
+            }
+        }
+        return response()->json(['ok'=>true, 'candidates'=> array_values($photos)]);
     }
 }

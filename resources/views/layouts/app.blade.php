@@ -8,7 +8,7 @@
     @viteReactRefresh
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 </head>
-<body style="margin:0;">
+<body class="m-0">
     @yield('content')
 
     @stack('scripts')

@@ -13,6 +13,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { usePages } from './hooks/usePages';
 import EditorCanvas from './components/EditorCanvas';
 import Sidebar from './components/Sidebar';
+import ReplaceDrawer from './components/ReplaceDrawer';
 import { api } from './api/client';
 import type { PageJson } from './api/types';
 
@@ -23,10 +24,23 @@ export default function App() {
 }
 
 function Root() {
-  const [folder, setFolder] = useState<string>('Alben/1');
+  const [folder, setFolder] = useState('');
   const [pageIdx, setPageIdx] = useState(0);
   const [albums, setAlbums] = useState([] as {hash:string;folder:string;count:number;created_at:string}[]);
-  useEffect(()=>{ api.getAlbums().then(r=> setAlbums(r.albums || [])).catch(()=>{}); },[]);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerIdx, setDrawerIdx] = useState(null as number | null);
+  const [candidates, setCandidates] = useState([] as { path: string; filename: string; src?: string | null }[]);
+  const [candLoading, setCandLoading] = useState(false);
+  const [pageVersion, setPageVersion] = useState(0);
+  useEffect(()=>{ api.getAlbums().then(r=> setAlbums(r?.albums || [])).catch(()=>{}); },[]);
+  useEffect(()=>{
+    if (albums.length === 0) return;
+    const has = albums.some(a => (a.folder || a.hash) === folder);
+    if (!folder || !has) {
+      const first = albums[0];
+      if (first) setFolder(first.folder || first.hash);
+    }
+  }, [albums]);
   const q = usePages(folder);
   const page = useMemo(() => {
     if (!q.data?.pages?.length) return null;
@@ -42,6 +56,7 @@ function Root() {
   const swapItems=(a:number,b:number)=>{
     if (!page) return;
     const arr=[...page.items]; [arr[a],arr[b]]=[arr[b],arr[a]]; page.items=arr;
+  setPageVersion(v=>v+1);
   };
 
   const save=async ()=>{
@@ -65,6 +80,33 @@ function Root() {
     alert('Saved page overrides');
   };
 
+  // open replace drawer
+  const openReplace = async (i: number) => {
+    setDrawerIdx(i);
+    setDrawerOpen(true);
+    setCandLoading(true);
+    try {
+      const r = await api.getCandidates(folder, page?.n || 1);
+      setCandidates(r.candidates || []);
+    } finally {
+      setCandLoading(false);
+    }
+  };
+
+  const applyReplacement = (cand: { path: string; filename: string; src?: string | null }, opts?: { preserveCrop?: boolean }) => {
+    if (!page || drawerIdx === null) return;
+    const it = page.items[drawerIdx];
+    page.items[drawerIdx] = {
+      ...it,
+      photo: { ...(it.photo||{} as any), path: cand.path, filename: cand.filename },
+      src: cand.src || it.src,
+      objectPosition: opts?.preserveCrop ? it.objectPosition : '50% 50%',
+      scale: opts?.preserveCrop ? (it.scale ?? 1) : 1,
+    };
+    setDrawerOpen(false);
+  setPageVersion(v=>v+1);
+  };
+
   if (q.isLoading) return <div className="p-6">Loading…</div>;
   if (q.isError) return <div className="p-6 text-red-600">Failed to load pages.json</div>;
   if (!page) return <div className="p-6">No pages.json yet. Folder: {folder}</div>;
@@ -76,7 +118,7 @@ function Root() {
           <input className="border border-neutral-300 rounded px-2 py-1" value={folder} onChange={e=>setFolder(e.target.value)} placeholder="Folder" />
           <button className="px-3 py-1 bg-neutral-800 text-white rounded" onClick={()=>q.refetch()}>Load</button>
           <select aria-label="Albums" className="border border-neutral-300 rounded px-2 py-1" value={folder} onChange={e=>{ setFolder(e.target.value); setPageIdx(0); }}>
-            <option value={folder}>Select album…</option>
+            <option value="">Select album…</option>
             {albums.map(a=> (
               <option key={a.hash} value={a.folder || a.hash}>{(a.folder||a.hash)} ({a.count})</option>
             ))}
@@ -94,6 +136,7 @@ function Root() {
             <EditorCanvas
               page={page}
               scale={1}
+              version={pageVersion}
               onSave={async (items)=>{
                 await api.savePage({
                   folder, page: page.n,
@@ -115,13 +158,14 @@ function Root() {
               }}
             />
           </div>
-          <Sidebar page={page} onSwap={swapItems} onReplace={(i)=>alert('TODO: image picker for item '+i)} onTemplateChange={async (tpl)=>{
+          <Sidebar page={page} onSwap={swapItems} onReplace={openReplace} onTemplateChange={async (tpl)=>{
             if (!page) return;
             page.templateId = tpl;
             await api.overrideTemplate({ folder, page: page.n, templateId: tpl });
             alert('Template set to '+tpl);
           }} />
         </div>
+  <ReplaceDrawer open={drawerOpen} onClose={()=>setDrawerOpen(false)} loading={candLoading} candidates={candidates} onPick={(c, o)=>applyReplacement(c, o)} />
       </main>
     </div>
   );

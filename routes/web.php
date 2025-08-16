@@ -24,6 +24,7 @@ Route::get('/photobook/pages', [PhotoBookController::class, 'pagesJson']);      
 Route::get('/photobook/overrides', [PhotoBookFeedbackController::class, 'listOverrides']); // GET ?folder=...
 Route::post('/photobook/save-page', [PhotoBookFeedbackController::class, 'savePage']);     // POST JSON
 Route::get('/photobook/albums', [PhotoBookController::class, 'albums']); // List cached albums (pages.json)
+Route::get('/photobook/candidates', [PhotoBookController::class, 'candidates']); // GET ?folder=...&page=...
 // ======= PHOTOBOOK_EDITOR_UI =======
 Route::get('/photobook/editor', function () {
     return view('photobook.editor');
@@ -35,14 +36,26 @@ use Illuminate\Http\Request;
 
 Route::get('/photobook/pages', function (Request $r) {
     $folder = (string) $r->query('folder', config('photobook.folder'));
-    $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
+    $hash = sha1($folder);
+    $cacheRoot = storage_path('app/pdf-exports/_cache/' . $hash);
     $pagesPath = $cacheRoot . DIRECTORY_SEPARATOR . 'pages.json';
     if (!is_file($pagesPath)) {
         return response()->json(['ok'=>false, 'error'=>'pages.json missing'], 404);
     }
     $json = @file_get_contents($pagesPath) ?: '';
     $data = json_decode($json, true);
-    return response()->json($data);
+    if (!is_array($data)) return response()->json(['ok'=>false,'error'=>'invalid json'], 422);
+    // Inject webSrc for each item if missing
+    foreach (($data['pages'] ?? []) as &$p) {
+        foreach (($p['items'] ?? []) as &$it) {
+            if (empty($it['webSrc']) && !empty($it['rel'])) {
+                $it['webSrc'] = route('photobook.asset', ['hash'=>$hash, 'path'=>$it['rel']]);
+            }
+        }
+        unset($it);
+    }
+    unset($p);
+    return response()->json(['ok'=>true, 'data'=>$data]);
 });
 
 Route::post('/photobook/save-page', function (Request $r) {

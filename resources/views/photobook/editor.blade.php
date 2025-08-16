@@ -1,7 +1,7 @@
 @extends('layouts.app')
 
 @section('content')
-  <div id="photobook-root" style="height: calc(100vh - 0px); background:#fafafa;"></div>
+  <div id="photobook-root" class="min-h-screen bg-neutral-50"></div>
 @endsection
 
 @push('scripts')

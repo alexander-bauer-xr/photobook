@@ -1,61 +1,172 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Photobook Editor
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+A modern web-based photobook editor built with **Laravel** (backend) and **React + TypeScript** (frontend).  
+It enables users to design, review, and customize photobooks with advanced layout, image, and template controls.
 
-## About Laravel
+---
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## Features
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+- **Album Management:**  
+  Browse, select, and switch between previously built albums (folders) with cached pages.
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+- **Page Editor:**  
+  - Drag-and-drop image positioning (object-position, momentum-less drag).
+  - Per-image zoom slider (background-size simulation).
+  - Keyboard nudges (arrow keys, Shift for larger steps).
+  - Filmstrip for quick photo selection and drag-reordering.
+  - Replace Drawer: swap images from candidate suggestions.
+  - Template Picker: change page layout and remap images.
+  - Snap-to-face: auto-center images on detected faces (ML features).
+  - Undo/Redo (in-memory, last 20 actions).
+  - UI state persistence (localStorage).
 
-## Learning Laravel
+- **Backend APIs:**  
+  - `GET /photobook/albums` — List available albums (folders with pages.json).
+  - `GET /photobook/pages?folder=...` — Get detailed pages.json for an album.
+  - `POST /photobook/override` — Override page template.
+  - `POST /photobook/save-page` — Save page edits (objectPosition, scale, etc).
+  - `GET /photobook/candidates?folder=&page=` — List candidate images for replacement.
+  - `GET /photobook/asset/{hash}/{path}` — Serve cached images for web display.
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+- **Styling:**  
+  - Tailwind CSS for all UI components.
+  - No inline styles; all dynamic positioning via CSS classes or variables.
 
-You may also try the [Laravel Bootcamp](https://bootcamp.laravel.com), where you will be guided through building a modern Laravel application from scratch.
+---
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+## Getting Started
 
-## Laravel Sponsors
+### Prerequisites
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+- PHP >= 8.1
+- Composer
+- Node.js >= 18
+- npm
+- SQLite or MySQL (for Laravel, if needed)
 
-### Premium Partners
+### Installation
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+1. **Clone the repository:**
+   ```sh
+   git clone https://github.com/your-org/photobook.git
+   cd photobook
+   ```
+
+2. **Install backend dependencies:**
+   ```sh
+   composer install
+   cp .env.example .env
+   php artisan key:generate
+   ```
+
+3. **Install frontend dependencies:**
+   ```sh
+   npm install
+   ```
+
+4. **Build or start the frontend:**
+   - For development (hot reload):
+     ```sh
+     npm run dev
+     ```
+   - For production:
+     ```sh
+     npm run build
+     ```
+
+5. **Start Laravel server:**
+   ```sh
+   php artisan serve
+   ```
+
+6. **Access the editor:**
+   - Open [http://localhost:8000/photobook/editor](http://localhost:8000/photobook/editor) in your browser.
+
+---
+
+## Folder Structure
+
+```
+photobook/
+├── app/                  # Laravel backend (controllers, services, jobs, DTOs)
+├── resources/
+│   ├── photobook-editor/ # React + TypeScript frontend
+│   │   ├── src/
+│   │   │   ├── api/      # API client and types
+│   │   │   ├── components/ # Editor UI components
+│   │   │   ├── hooks/    # Custom React hooks
+│   │   │   ├── state/    # Zustand state management
+│   │   ├── main.tsx      # React entry point
+│   │   ├── index.css     # Tailwind CSS entry
+│   ├── views/            # Blade templates
+│   ├── css/              # Global CSS
+│   ├── js/               # Global JS
+├── storage/app/pdf-exports/_cache/ # Album caches (pages.json, images, logs)
+├── routes/               # Laravel routes (web.php, console.php)
+├── public/               # Public assets
+├── README.md
+```
+
+---
+
+## Usage
+
+- **Build an album:**  
+  Use the backend job or CLI to generate a photobook. This creates a folder under `storage/app/pdf-exports/_cache/<hash>/` with a `pages.json` and images.
+
+- **Open the editor:**  
+  Visit `/photobook/editor`, select an album from the dropdown, and start editing.
+
+- **Edit pages:**  
+  - Drag images, zoom, reorder, replace, and change templates.
+  - Save changes to persist overrides and edits.
+
+- **Switch albums:**  
+  Use the dropdown to load other cached albums.
+
+---
+
+## Development Notes
+
+- **Frontend:**  
+  - Uses Vite for fast development and hot module reload.
+  - React Query for API data, Zustand for selection state.
+  - All styling via Tailwind CSS.
+
+- **Backend:**  
+  - Laravel controllers expose RESTful endpoints for all editor actions.
+  - Asset serving via `/photobook/asset/{hash}/{path}` for secure image access.
+
+- **Image URLs:**  
+  - Always use `web` or `webSrc` fields for images in the frontend (never system paths).
+
+---
+
+## Roadmap
+
+- [x] Replace Drawer with candidate filters and preserve crop toggle.
+- [ ] Template Picker with slot remapping and previews.
+- [ ] Snap-to-face (ML features endpoint and UI).
+- [ ] Undo/Redo and autosave.
+- [ ] Page navigation strip and snapping guides.
+- [ ] Album rebuild, export, and review tools.
+
+---
 
 ## Contributing
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+Pull requests and issues are welcome!  
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-## Code of Conduct
-
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
-
-## Security Vulnerabilities
-
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+---
 
 ## License
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+MIT License. See [LICENSE](LICENSE) for details.
+
+---
+
+## Credits
+
+Built with [Laravel](https://laravel.com), [React](https://react.dev), [Tailwind CSS](https://tailwindcss.com)
