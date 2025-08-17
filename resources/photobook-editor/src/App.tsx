@@ -42,6 +42,18 @@ function Root() {
     }
   }, [albums]);
   const q = usePages(folder);
+  // Build a web URL for cached assets from an absolute path like .../_cache/<hash>/<rel>
+  const filePathToAssetUrl = (p?: string | null): string | null => {
+    if (!p) return null;
+    const norm = String(p).replace(/^[a-z]+:\/\//i, '').replace(/\\/g, '/');
+    const m = norm.match(/\/_cache\/([^/]+)\/(.+)$/);
+    if (!m) return null;
+    const hash = m[1];
+    const rel = m[2];
+    // Encode each segment but keep slashes in place
+    const encRel = rel.split('/').map(encodeURIComponent).join('/');
+    return `/photobook/asset/${encodeURIComponent(hash)}/${encRel}`;
+  };
   const page = useMemo(() => {
     if (!q.data?.pages?.length) return null;
     return q.data.pages[Math.max(0, Math.min(pageIdx, q.data.pages.length-1))];
@@ -63,11 +75,11 @@ function Root() {
     if (!page) return;
     await api.savePage({
       folder, page: page.n,
-      items: page.items.map(it=>({
+      items: page.items.map(it => ({
         slotIndex: it.slotIndex,
         crop: it.crop || 'cover',
         objectPosition: it.objectPosition || '50% 50%',
-        scale: it.scale || 1,
+        scale: (typeof it.scale === 'number' && isFinite(it.scale) && it.scale > 0) ? it.scale : 1,
         photo: it.photo ? {
           path: it.photo.path, filename: it.photo.filename,
           width: it.photo.width ?? null, height: it.photo.height ?? null,
@@ -96,13 +108,19 @@ function Root() {
   const applyReplacement = (cand: { path: string; filename: string; src?: string | null }, opts?: { preserveCrop?: boolean }) => {
     if (!page || drawerIdx === null) return;
     const it = page.items[drawerIdx];
+    const derived = cand.src || filePathToAssetUrl(cand.path) || it.src || null;
     page.items[drawerIdx] = {
       ...it,
       photo: { ...(it.photo||{} as any), path: cand.path, filename: cand.filename },
-      src: cand.src || it.src,
+      src: derived || undefined,
       objectPosition: opts?.preserveCrop ? it.objectPosition : '50% 50%',
       scale: opts?.preserveCrop ? (it.scale ?? 1) : 1,
     };
+    // Ensure preview switches immediately: override any builder-provided web/webSrc
+    try {
+      (page.items[drawerIdx] as any).web = derived || undefined;
+      (page.items[drawerIdx] as any).webSrc = derived || undefined;
+    } catch {}
     setDrawerOpen(false);
   setPageVersion(v=>v+1);
   };
@@ -144,7 +162,7 @@ function Root() {
                     slotIndex: it.slotIndex,
                     crop: it.crop || 'cover',
                     objectPosition: it.objectPosition || '50% 50%',
-                    scale: (typeof it.scale === 'number' && isFinite(it.scale) && it.scale>0) ? it.scale : 1,
+                    scale: (typeof it.scale === 'number' && isFinite(it.scale) && it.scale > 0) ? it.scale : 1,
                     photo: it.photo ? {
                       path: it.photo.path, filename: it.photo.filename,
                       width: it.photo.width ?? null, height: it.photo.height ?? null,
