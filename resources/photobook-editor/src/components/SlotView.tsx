@@ -82,8 +82,6 @@ export default function SlotView({
     contentH
   );
 
-  // Use final width to derive actual scale (includes base fit + zoom)
-  // Safe even if math.scale is only base scale.
   const imgScale = iw > 0 ? math.fw / iw : 1;
 
   const src = getSrc(item);
@@ -125,15 +123,23 @@ export default function SlotView({
             alt=""
             draggable={false}
             className="select-none"
-            width={loaded ? undefined : contentW}
-            height={loaded ? undefined : contentH}
             style={{
               position: 'absolute',
               left: '50%',
               top: '50%',
-              transform: `translate(-50%, -50%) translate(${Math.round(
-                panX
-              )}px, ${Math.round(panY)}px) rotate(${rot}deg) scale(${imgScale})`,
+
+              maxWidth: 'none',
+              maxHeight: 'none',
+
+              width: loaded ? `${iw}px` : undefined,
+              height: loaded ? `${ih}px` : undefined,
+
+              transform: `
+                translate(-50%, -50%)
+                translate(${Math.round(panX)}px, ${Math.round(panY)}px)
+                rotate(${rot}deg)
+                scale(${math.scale})
+              `,
               transformOrigin: 'center center',
               cursor: loaded ? 'grab' : 'default',
               userSelect: 'none',

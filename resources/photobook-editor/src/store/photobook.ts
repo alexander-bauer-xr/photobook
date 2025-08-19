@@ -51,11 +51,16 @@ export const usePB = create<PBState>((set, get) => ({
       items: (p.items || []).map((it: any) => ({
         slotIndex: it.slotIndex ?? 0,
         photo: it.photo,
-        src: it.web ?? it.webSrc ?? it.src ?? null,
-        objectPosition: it.objectPosition ?? '50% 50%',
-        crop: it.crop === 'contain' ? 'contain' : 'cover',
-        scale: typeof it.scale === 'number' && isFinite(it.scale) && it.scale > 0 ? it.scale : 1,
-        rotate: typeof it.rotate === 'number' && isFinite(it.rotate) ? it.rotate : 0,
+    src: it.web ?? it.webSrc ?? it.src ?? null,
+    // Prefer canonical when present, else legacy
+    objectPosition: it.objectPosition ?? (typeof it.align === 'object' && it.align
+      ? `${Math.round(50 + Math.max(-1, Math.min(1, Number(it.align.x ?? 0))) * 50)}% ${Math.round(50 + Math.max(-1, Math.min(1, Number(it.align.y ?? 0))) * 50)}%`
+      : '50% 50%'),
+    crop: (it.fit === 'contain' || it.crop === 'contain') ? 'contain' : 'cover',
+    scale: (Number.isFinite(it.zoom) && it.zoom > 0) ? Number(it.zoom)
+      : (typeof it.scale === 'number' && isFinite(it.scale) && it.scale > 0 ? it.scale : 1),
+    rotate: Number.isFinite(it.rotation) ? Number(it.rotation)
+      : (typeof it.rotate === 'number' && isFinite(it.rotate) ? it.rotate : 0),
         x: it.x, y: it.y, width: it.width, height: it.height,
         caption: it.caption,
       })),

@@ -88,6 +88,12 @@ type AnyItem = {
   rotation?: number;    // deg
   auto?: boolean;
 
+  // Legacy (server fields) that may appear on inbound items
+  objectPosition?: string; // e.g., "50% 50%"
+  crop?: 'cover' | 'contain';
+  scale?: number;
+  rotate?: number;
+
   // Runtime
   _iw?: number; _ih?: number; // natural size
   _error?: boolean;           // load error
@@ -129,13 +135,31 @@ const getSrc = (it: AnyItem) => (it as any).web || (it as any).webSrc || it.src 
    Persist: Normalisieren, Validieren, Payload, POST
    ========================================================= */
 function normalizeItem(it: AnyItem): AnyItem {
+  // Helpers to convert legacy objectPosition <-> align
+  const toAlign = (op?: string): Align | undefined => {
+    if (!op) return undefined;
+    const parts = String(op).trim().split(/\s+/, 2);
+    const px = Number((parts[0] || '').replace('%',''));
+    const py = Number((parts[1] || '').replace('%',''));
+    if (!Number.isFinite(px) || !Number.isFinite(py)) return undefined;
+    const ax = clamp((px - 50) / 50, -1, 1);
+    const ay = clamp((py - 50) / 50, -1, 1);
+    return { x: ax, y: ay };
+  };
+
   return {
     ...it,
-    fit: (it.fit === 'contain' ? 'contain' : 'cover'),
-    align: it.align ?? { x: 0, y: 0 },
+    // Fit: prefer canonical, else legacy crop
+    fit: (it.fit ?? (it.crop === 'contain' ? 'contain' : 'cover')) as Fit,
+    // Align: prefer canonical, else map from objectPosition, else center
+    align: it.align ?? toAlign(it.objectPosition) ?? { x: 0, y: 0 },
     offset: it.offset ?? { x: 0, y: 0 },
-    zoom: isFinitePos(it.zoom) ? (it.zoom as number) : 1,
-    rotation: Number.isFinite(it.rotation) ? (it.rotation as number) % 360 : 0,
+    // Zoom: prefer canonical, else legacy scale
+    zoom: isFinitePos(it.zoom) ? (it.zoom as number)
+         : (isFinite(it.scale as any) && (it.scale as any) > 0 ? Number(it.scale) : 1),
+    // Rotation: prefer canonical, else legacy rotate
+    rotation: Number.isFinite(it.rotation) ? (it.rotation as number) % 360
+            : (Number.isFinite(it.rotate) ? (Number(it.rotate) % 360) : 0),
     auto: it.auto === true ? true : false
   };
 }
@@ -156,14 +180,18 @@ function buildOverridesPayload(pageNumber: number, items: AnyItem[]) {
   return {
     pages: {
       [pageKey]: {
+        // Persist legacy shape expected by PHP builder (and our web save endpoint)
         items: items.map(it => ({
           slotIndex: it.slotIndex,
-          fit: it.fit,
-          align: it.align,
-          offset: it.offset,
-          zoom: it.zoom,
-          rotation: it.rotation,
-          auto: it.auto === true, // explizit
+          crop: (it.fit === 'contain' ? 'contain' : 'cover'),
+          objectPosition: (() => {
+            const ax = clamp(it.align?.x ?? 0, -1, 1);
+            const ay = clamp(it.align?.y ?? 0, -1, 1);
+            return `${Math.round(50 + ax * 50)}% ${Math.round(50 + ay * 50)}%`;
+          })(),
+          scale: (isFinite(it.zoom as any) && (it.zoom as any) > 0) ? Number(it.zoom) : 1,
+          rotate: Number.isFinite(it.rotation) ? Number(it.rotation) : 0,
+          auto: it.auto === true,
           ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {})
         }))
       }
@@ -297,20 +325,21 @@ export default function EditorCanvas({
       const bad = errs.find(e => e.length);
       if (bad) throw new Error('validation failed: ' + JSON.stringify(errs));
 
-      const overridesArray: SaveOverride[] = normalized.map(it => ({
-        page: page.n,
+      // Call parent onSave with legacy-shaped items for compatibility
+      const legacyItems = normalized.map(it => ({
         slotIndex: it.slotIndex,
-        override: {
-          fit: it.fit as Fit,
-          align: it.align as Align,
-          offset: it.offset as Offset,
-          zoom: it.zoom as number,
-          rotation: it.rotation as number,
-          auto: it.auto === true,
-          ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {})
-        }
+        crop: (it.fit === 'contain' ? 'contain' : 'cover'),
+        objectPosition: (() => {
+          const ax = clamp(it.align?.x ?? 0, -1, 1);
+          const ay = clamp(it.align?.y ?? 0, -1, 1);
+          return `${Math.round(50 + ax * 50)}% ${Math.round(50 + ay * 50)}%`;
+        })(),
+        scale: (isFinite(it.zoom as any) && (it.zoom as any) > 0) ? Number(it.zoom) : 1,
+        rotate: Number.isFinite(it.rotation) ? Number(it.rotation) : 0,
+        photo: it.photo ? { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } : null,
+        src: (it as any).webSrc || (it as any).web || (it as any).src || null,
       }));
-      onSave?.(overridesArray);
+      onSave?.(legacyItems as any);
 
       if (saveUrl) {
         setSaveState('saving');
