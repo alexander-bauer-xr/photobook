@@ -105,22 +105,18 @@ type SaveOverride = {
 };
 
 type Props = {
-  page: Page;
-  onSave?: (overrides: SaveOverride[]) => void;
-  onChange?: (items: AnyItem[]) => void;
-  width?: number;
-  height?: number;
-  version?: number;
-
-  // Server-Persist optional
-  saveUrl?: string;
-  saveFetchInit?: Omit<RequestInit, 'method' | 'body'>;
-
-  // Tuning
-  gapPx?: number;                  // muss PDF/Blade entsprechen (Default 8)
-  wheelZoomNeedsCtrl?: boolean;    // nur mit Ctrl/Cmd zoomen (Default true)
-  showHud?: boolean;               // Debug-HUD (Default true)
-};
+   page: Page;
+   onSave?: (overrides: SaveOverride[]) => void;
+   onChange?: (items: AnyItem[]) => void;
+   width?: number;
+   height?: number;
+   version?: number;
+   saveUrl?: string;
+   saveFetchInit?: Omit<RequestInit, 'method' | 'body'>;
+   gapPx?: number;
+   wheelZoomNeedsCtrl?: boolean;
+   showHud?: boolean;
+ };
 
 /* =========================================================
    Mathe (Parität zum PHP-Builder)
@@ -197,17 +193,17 @@ async function postOverrides(saveUrl: string, payload: any, init?: Omit<RequestI
    Main Component
    ========================================================= */
 export default function EditorCanvas({
-  page,
-  onSave,
-  onChange,
-  width = 900,
-  height = 600,
-  version = 0,
-  saveUrl,
-  saveFetchInit,
-  gapPx = 8,
-  wheelZoomNeedsCtrl = true,
-  showHud = true
+   page,
+   onSave,
+   onChange,
+   width = 900,
+   height = 600,
+   version = 0,
+   saveUrl,
+   saveFetchInit,
+   gapPx = 8,
+   wheelZoomNeedsCtrl = true,
+  showHud = true,
 }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [pageSize, setPageSize] = useState({ w: width, h: height });
@@ -633,6 +629,7 @@ export default function EditorCanvas({
 
           // Layout Snapshot für Wheel/Pinch
           layoutRef.current[i] = { slotLeft, slotTop, slotW, slotH, contentW, contentH, innerPad };
+          
 
           return (
             <React.Fragment key={i}>
