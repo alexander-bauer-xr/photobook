@@ -54,6 +54,51 @@ class BuildPhotoBook implements ShouldQueue
             'mem_mb' => round(memory_get_usage(true) / 1048576, 1),
         ]);
 
+        // Run feature extraction if ML is enabled and we're missing features
+        if (config('photobook.ml.enable') && \Illuminate\Support\Facades\Schema::hasTable('photo_features')) {
+            $needsExtraction = false;
+            
+            // Check if we have any ML features that require sidecar processing
+            $needsSidecar = config('photobook.ml.faces') || 
+                           config('photobook.ml.aesthetic') || 
+                           config('photobook.ml.saliency') || 
+                           config('photobook.ml.horizon');
+            
+            if ($needsSidecar && count($photos) > 0) {
+                // Sample a few photos to see if we have features
+                $samplePaths = array_slice(array_map(fn($p) => $p->path, $photos), 0, 5);
+                $existing = \App\Models\PhotoFeature::whereIn('path', $samplePaths)->count();
+                
+                if ($existing < count($samplePaths) * 0.5) { // Less than 50% have features
+                    $needsExtraction = true;
+                }
+            }
+            
+            if ($needsExtraction) {
+                try {
+                    // Update progress
+                    $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
+                    @file_put_contents($cacheRoot . DIRECTORY_SEPARATOR . 'task.status.json', json_encode([
+                        'state' => 'running', 
+                        'progress' => 5, 
+                        'step' => 'Extracting ML features...',
+                        'startedAt' => date(DATE_ATOM)
+                    ]));
+                    
+                    logger()->info('PB: Running feature extraction for folder: ' . $folder);
+                    \Illuminate\Support\Facades\Artisan::call('photobook:extract', [
+                        'folder' => $folder,
+                        '--force' => false
+                    ]);
+                    
+                    logger()->info('PB: Feature extraction completed');
+                } catch (\Throwable $e) {
+                    logger()->error('PB: Feature extraction failed: ' . $e->getMessage());
+                    // Continue with build even if feature extraction fails
+                }
+            }
+        }
+
         // Optional: limit for debugging large sets
         if (!empty($this->options['max_photos']) && is_numeric($this->options['max_photos'])) {
             $photos = array_slice($photos, 0, (int) $this->options['max_photos']);
@@ -166,6 +211,7 @@ class BuildPhotoBook implements ShouldQueue
             }
             // Load review overrides if present (latest entry for each page wins)
             $overridesByPage = [];
+            $jsonOverridesByPage = [];
             try {
                 $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
                 $ovFile = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.log';
@@ -182,12 +228,25 @@ class BuildPhotoBook implements ShouldQueue
                         }
                     }
                 }
+                // Also read structured overrides.json to honor explicit templateId per page
+                $ovJson = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.json';
+                if (is_file($ovJson)) {
+                    $ov = json_decode((string) @file_get_contents($ovJson), true) ?: [];
+                    $pagesOv = (array) ($ov['pages'] ?? []);
+                    foreach ($pagesOv as $k => $entry) {
+                        $n = (int) $k;
+                        $tid = (string) ($entry['templateId'] ?? '');
+                        if ($n >= 1 && $tid !== '') {
+                            $jsonOverridesByPage[$n] = $tid;
+                        }
+                    }
+                }
             } catch (\Throwable $e) {
                 // ignore
             }
             foreach ($groups as $group) {
                 $pageIndex = count($pages) + 1; // 1-based page index in review
-                $overrideTpl = $overridesByPage[$pageIndex] ?? null;
+                $overrideTpl = $jsonOverridesByPage[$pageIndex] ?? ($overridesByPage[$pageIndex] ?? null);
                 if ($overrideTpl) {
                     $choice = $plannerV2->chooseLayoutWithTemplate($group, $overrideTpl);
                 } else {
@@ -222,7 +281,80 @@ class BuildPhotoBook implements ShouldQueue
             ]);
         }
 
+        // Apply editor overrides (positions, captions, etc.) from overrides.json if available
+        try {
+            $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
+            $ovPath = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.json';
+            if (is_file($ovPath)) {
+                $ov = json_decode((string) @file_get_contents($ovPath), true) ?: [];
+                $ovPages = (array) ($ov['pages'] ?? []);
+                if (!empty($ovPages)) {
+                    for ($i = 0; $i < count($pages); $i++) {
+                        $pageNo = (string) ($i + 1);
+                        $ovp = $ovPages[$pageNo] ?? null;
+                        if (!$ovp || !is_array($ovp)) continue;
+                        if (!empty($ovp['templateId'])) {
+                            $pages[$i]['templateId'] = (string) $ovp['templateId'];
+                        }
+                        if (isset($ovp['items']) && is_array($ovp['items'])) {
+                            foreach ($ovp['items'] as $oit) {
+                                $slotIdx = (int) ($oit['slotIndex'] ?? -1);
+                                if ($slotIdx >= 0) {
+                                    // Map relative x/y/width/height overrides to slot rects for generic template
+                                    foreach (['x','y','width','height'] as $k) {
+                                        if (array_key_exists($k, $oit) && isset($pages[$i]['slots'][$slotIdx])) {
+                                            $pages[$i]['slots'][$slotIdx][substr($k,0,1)] = (float) $oit[$k]; // x->x, y->y, width->w, height->h
+                                            if ($k === 'width') $pages[$i]['slots'][$slotIdx]['w'] = (float) $oit[$k];
+                                            if ($k === 'height') $pages[$i]['slots'][$slotIdx]['h'] = (float) $oit[$k];
+                                        }
+                                    }
+                                    // Find matching item by slotIndex
+                                    if (isset($pages[$i]['items']) && is_array($pages[$i]['items'])) {
+                                        foreach ($pages[$i]['items'] as $j => $pit) {
+                                            $si = (int) ($pit['slotIndex'] ?? 0);
+                                            if ($si === $slotIdx) {
+                                                // Apply visual overrides
+                                                foreach (['caption','objectPosition','crop','scale','rotate'] as $k) {
+                                                    if (array_key_exists($k, $oit)) {
+                                                        $pages[$i]['items'][$j][$k] = $oit[$k];
+                                                    }
+                                                }
+                                                // Apply photo override if provided
+                                                if (isset($oit['photo']) && is_array($oit['photo'])) {
+                                                    $pages[$i]['items'][$j]['photo'] = $oit['photo'];
+                                                }
+                                                // Apply src override if provided; map /photobook/asset/{hash}/{rel} to local cache file
+                                                if (!empty($oit['src']) && is_string($oit['src'])) {
+                                                    $src = (string) $oit['src'];
+                                                    $hash = sha1($folder);
+                                                    if (preg_match('#/photobook/asset/' . preg_quote($hash, '#') . '/(.+)$#', $src, $m)) {
+                                                        $rel = $m[1];
+                                                        $local = storage_path('app/pdf-exports/_cache/' . $hash . '/' . $rel);
+                                                        // Prefer local file if exists, else keep URL
+                                                        $pages[$i]['items'][$j]['src'] = is_file($local) ? ('file://' . $local) : $src;
+                                                    } else {
+                                                        $pages[$i]['items'][$j]['src'] = $src;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            logger()->debug('PB: overrides merge skipped', ['err' => $e->getMessage()]);
+        }
+
         $t = microtime(true);
+        // Update progress pre-render
+        try {
+            $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
+            @file_put_contents($cacheRoot . DIRECTORY_SEPARATOR . 'task.status.json', json_encode(['state'=>'rendering','progress'=>75, 'step' => 'Rendering pages...']));
+        } catch (\Throwable $e) {}
         [$html, $assetsDir] = $builder->render($pages, $this->options);
         logger()->info('PB: builder rendered', [
             'html_kb' => round(strlen($html) / 1024, 1),
@@ -233,6 +365,11 @@ class BuildPhotoBook implements ShouldQueue
 
         $name = 'book-' . now()->format('Ymd-His') . '.pdf';
         $t = microtime(true);
+        // Update progress pre-PDF
+        try {
+            $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
+            @file_put_contents($cacheRoot . DIRECTORY_SEPARATOR . 'task.status.json', json_encode(['state'=>'pdf','progress'=>90, 'step' => 'Generating PDF...']));
+        } catch (\Throwable $e) {}
         $pdf->renderTo($name, $html, $paper, $orientation, $dpi);
         $renderSecs = round(microtime(true) - $t, 2);
 
@@ -242,5 +379,9 @@ class BuildPhotoBook implements ShouldQueue
             'total_secs' => round(microtime(true) - $jobStart, 2),
             'mem_peak_mb' => $peak,
         ]);
+        try {
+            $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
+            @file_put_contents($cacheRoot . DIRECTORY_SEPARATOR . 'task.status.json', json_encode(['state'=>'finished','progress'=>100,'step'=>'Complete','finishedAt'=>date(DATE_ATOM)]));
+        } catch (\Throwable $e) {}
     }
 }

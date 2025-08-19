@@ -45,6 +45,68 @@ Route::get('/photobook/pages', function (Request $r) {
     $json = @file_get_contents($pagesPath) ?: '';
     $data = json_decode($json, true);
     if (!is_array($data)) return response()->json(['ok'=>false,'error'=>'invalid json'], 422);
+
+    // Overlay overrides.json if present (templateId + per-item fields), preserving src/photo/web/rel
+    try {
+        $ovPath = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.json';
+        $ov = is_file($ovPath) ? (json_decode(@file_get_contents($ovPath), true) ?: []) : [];
+        $ovPages = (array) ($ov['pages'] ?? []);
+        if (!empty($ovPages)) {
+            // Special-case cover: if page "1" with templateId cover exists, reflect its item[0] into top-level cover
+            try {
+                $cov = $ovPages['1'] ?? null;
+                if (is_array($cov) && (($cov['templateId'] ?? '') === 'cover') && !empty($cov['items'][0])) {
+                    $ci = $cov['items'][0];
+                    $data['cover'] = $data['cover'] ?? [];
+                    if (!empty($ci['photo']['path'])) {
+                        // store relative cache path if provided via src URL
+                        if (!empty($ci['src']) && is_string($ci['src'])) {
+                            $data['cover']['webSrc'] = $ci['src'];
+                        }
+                        $data['cover']['image'] = $ci['photo']['path'];
+                        foreach (['objectPosition','scale','rotate'] as $k) if (isset($ci[$k])) $data['cover'][$k] = $ci[$k];
+                    }
+                }
+            } catch (\Throwable $e) {}
+            foreach (($data['pages'] ?? []) as &$p) {
+                $n = (string) ($p['n'] ?? '');
+                if ($n === '' || !isset($ovPages[$n]) || !is_array($ovPages[$n])) continue;
+                $ovp = $ovPages[$n];
+                if (!empty($ovp['templateId'])) {
+                    $p['templateId'] = (string) $ovp['templateId'];
+                }
+                if (isset($ovp['items']) && is_array($ovp['items']) && isset($p['items']) && is_array($p['items'])) {
+                    // Merge by slotIndex; keep base photo/web/rel unless overridden, update visual fields
+                    $baseItems = $p['items'];
+                    foreach ($ovp['items'] as $ovIt) {
+                        $slotIdx = (int) ($ovIt['slotIndex'] ?? -1);
+                        if ($slotIdx < 0) continue;
+                        // find first item in base with same slotIndex
+                        foreach ($baseItems as $j => $bi) {
+                            if ((int) ($bi['slotIndex'] ?? -1) === $slotIdx) {
+                                foreach (['objectPosition','crop','scale','rotate','caption','x','y','width','height','src'] as $k) {
+                                    if (array_key_exists($k, $ovIt)) {
+                                        $baseItems[$j][$k] = $ovIt[$k];
+                                    }
+                                }
+                                // If override provides a concrete src (URL), reflect it into web/webSrc so UI prefers it
+                                if (!empty($ovIt['src']) && is_string($ovIt['src'])) {
+                                    $baseItems[$j]['web'] = $ovIt['src'];
+                                    $baseItems[$j]['webSrc'] = $ovIt['src'];
+                                    // rel is now ambiguous; drop it to avoid stale mapping
+                                    unset($baseItems[$j]['rel']);
+                                }
+                            }
+                        }
+                    }
+                    $p['items'] = $baseItems;
+                }
+            }
+            unset($p);
+        }
+    } catch (\Throwable $e) {
+        // ignore
+    }
     // Inject webSrc for each item if missing
     foreach (($data['pages'] ?? []) as &$p) {
         foreach (($p['items'] ?? []) as &$it) {

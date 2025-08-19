@@ -21,6 +21,13 @@ export type PageItem = {
   src?: string;
   photo?: Photo | null;
   scale?: number;
+  rotate?: number; // degrees, clockwise. default 0
+  // Optional geometry overrides (normalized to page width/height, 0..1)
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  caption?: string;
 };
 
 export type PageJson = {

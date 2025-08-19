@@ -33,12 +33,61 @@ class PhotoBookBuilder
             @mkdir($imagesDir, 0775, true);
         }
 
-    // Collect unique photos by path
+        // Initialize/update progress file if present
+        try {
+            @file_put_contents($cacheRoot . DIRECTORY_SEPARATOR . 'task.status.json', json_encode([
+                'state' => 'running', 'progress' => 15, 'step' => 'Preparing images...', 'startedAt' => date(DATE_ATOM)
+            ]));
+        } catch (\Throwable $e) {}
+
+        // Collect unique photos by path (both legacy photos[] and generic items[].photo)
         $unique = [];
         foreach ($pages as $page) {
-            foreach ($page['photos'] as $p) {
-                $unique[$p->path] = $p;
+            // Legacy planner array of Photo models
+            foreach (($page['photos'] ?? []) as $p) {
+                if ($p && isset($p->path)) $unique[$p->path] = $p;
             }
+            // New generic planner with slots+items
+            foreach (($page['items'] ?? []) as $it) {
+                $p = $it['photo'] ?? null;
+                if (is_array($p)) {
+                    $path = $p['path'] ?? null;
+                    if ($path) {
+                        $pp = (object) [
+                            'path' => $path,
+                            'filename' => $p['filename'] ?? basename((string) $path),
+                        ];
+                        $unique[$pp->path] = $pp;
+                    }
+                } elseif (is_object($p) && isset($p->path)) {
+                    $unique[$p->path] = $p;
+                }
+            }
+        }
+
+        // Track original cover photo (if known) for export and ensure it is cached too
+        $coverOrigPhoto = null;
+        try {
+            $folder = $options['folder'] ?? config('photobook.folder');
+            $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
+            $ovFileEarly = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.json';
+            if (is_file($ovFileEarly)) {
+                $ovEarly = json_decode((string) @file_get_contents($ovFileEarly), true) ?: [];
+                $coverPageEarly = $ovEarly['pages']['1'] ?? null;
+                if (is_array($coverPageEarly) && ($coverPageEarly['templateId'] ?? '') === 'cover') {
+                    $coverItemEarly = $coverPageEarly['items'][0] ?? null;
+                    if (is_array($coverItemEarly) && !empty($coverItemEarly['photo']['path'])) {
+                        $p = $coverItemEarly['photo'];
+                        $coverOrigPhoto = (object) [
+                            'path' => $p['path'],
+                            'filename' => $p['filename'] ?? basename($p['path']),
+                        ];
+                        $unique[$coverOrigPhoto->path] = $coverOrigPhoto;
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            // ignore, non-fatal
         }
         // Build signature for current set of paths
         $paths = array_keys($unique);
@@ -71,7 +120,7 @@ class PhotoBookBuilder
         }
 
         // If no valid cache, (re)populate cache images for requested set
-        if (empty($map)) {
+    if (empty($map)) {
             $total = count($unique);
             $idx = 0;
             $copied = 0;
@@ -232,6 +281,124 @@ class PhotoBookBuilder
             ]);
         }
 
+        // Resolve cover image from overrides.json first, then fallbacks
+        try {
+            $ensureRelAndSrc = function(string $rel) use (&$options, $cacheRoot, $folder) {
+                if ($rel === '') return false;
+                $full = realpath($cacheRoot . DIRECTORY_SEPARATOR . $rel) ?: ($cacheRoot . DIRECTORY_SEPARATOR . $rel);
+                if (!is_file($full)) return false;
+                $options['cover_image'] = $rel;
+                $options['cover_image_src'] = 'file:///' . str_replace('\\', '/', $full);
+                // Also provide an HTTP URL fallback for environments where file:/// is restricted
+                try {
+                    $hash = sha1($folder);
+                    $options['cover_image_web'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')]);
+                } catch (\Throwable $e) {
+                    // ignore route issues
+                }
+                return true;
+            };
+
+            $has = false;
+            // 1) Check overrides.json for cover page (page "1" with templateId "cover")
+            $ovFile = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.json';
+            if (is_file($ovFile)) {
+                $ov = json_decode((string) @file_get_contents($ovFile), true) ?: [];
+                $coverPage = $ov['pages']['1'] ?? null;
+                if (is_array($coverPage) && ($coverPage['templateId'] ?? '') === 'cover') {
+                    $coverItem = $coverPage['items'][0] ?? null;
+                    if (is_array($coverItem) && !empty($coverItem['photo']['path'])) {
+                        $photo = $coverItem['photo'];
+                        $pPath = (string) $photo['path'];
+                        // Prefer the actual cached file from map to handle conversions (e.g., PNG -> JPG)
+                        $cached = $map[$pPath] ?? null;
+                        if ($cached && is_file($cached)) {
+                            $file = realpath($cached) ?: $cached;
+                            $rel = 'images/' . basename($file);
+                            if ($ensureRelAndSrc($rel)) {
+                                $has = true;
+                            }
+                        }
+                        if (!$has) {
+                            // Fallback to deriving by hash+ext (legacy behavior)
+                            $ext = strtolower(pathinfo($photo['filename'] ?? basename($pPath), PATHINFO_EXTENSION) ?: 'jpg');
+                            $fname = sha1($pPath) . ($ext ? ('.' . $ext) : '');
+                            $rel = 'images/' . $fname;
+                            if ($ensureRelAndSrc($rel)) {
+                                $has = true;
+                            }
+                        }
+                        if ($has) {
+                            $has = true;
+                            // Also apply cover positioning from overrides
+                            if (!empty($coverItem['objectPosition'])) $options['cover_object_position'] = $coverItem['objectPosition'];
+                            if (isset($coverItem['scale'])) $options['cover_scale'] = $coverItem['scale'];
+                            if (isset($coverItem['rotate'])) $options['cover_rotate'] = $coverItem['rotate'];
+                            // keep original photo ref for export
+                            if (!$coverOrigPhoto) {
+                                $coverOrigPhoto = (object) [
+                                    'path' => $pPath,
+                                    'filename' => $photo['filename'] ?? basename($pPath),
+                                ];
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // 2) Explicit option
+            if (!$has && !empty($options['cover_image'])) {
+                $has = $ensureRelAndSrc((string) $options['cover_image']);
+            }
+            
+            // 3) From last pages.json
+            if (!$has) {
+                $prev = $cacheRoot . DIRECTORY_SEPARATOR . 'pages.json';
+                if (is_file($prev)) {
+                    $doc = json_decode((string) @file_get_contents($prev), true) ?: [];
+                    $rel = (string) ($doc['cover']['image'] ?? '');
+                    if ($rel !== '') {
+                        $has = $ensureRelAndSrc($rel);
+                        if (!empty($doc['cover']['title']) && empty($options['title'])) {
+                            $options['title'] = (string) $doc['cover']['title'];
+                        }
+                    }
+                }
+            }
+            
+            // 4) Auto-pick from first page/photo
+            if (!$has) {
+                $firstPhoto = null;
+                if (!empty($pages) && !empty($pages[0]['photos'])) {
+                    $firstPhoto = $pages[0]['photos'][0] ?? null;
+                } elseif (!empty($pages)) {
+                    foreach ($pages as $pg) {
+                        foreach (($pg['items'] ?? []) as $it) {
+                            if (!empty($it['photo'])) { $firstPhoto = $it['photo']; break 2; }
+                        }
+                    }
+                }
+                $fpPath = is_array($firstPhoto) ? ($firstPhoto['path'] ?? null) : (is_object($firstPhoto) ? ($firstPhoto->path ?? null) : null);
+                if ($fpPath) {
+                    $fpFilename = is_array($firstPhoto) ? ($firstPhoto['filename'] ?? basename($fpPath)) : ($firstPhoto->filename ?? basename($fpPath));
+                    $ext = strtolower(pathinfo($fpFilename ?: basename($fpPath), PATHINFO_EXTENSION) ?: 'jpg');
+                    $fname = sha1($fpPath) . ($ext ? ('.' . $ext) : '');
+                    $rel = 'images/' . $fname;
+                    if ($ensureRelAndSrc($rel)) {
+                        $has = true;
+                        if (!$coverOrigPhoto) {
+                            $coverOrigPhoto = (object) [
+                                'path' => $fpPath,
+                                'filename' => $fpFilename,
+                            ];
+                        }
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            // ignore cover resolution errors
+        }
+
     // Build feature map (faces/saliency) once for focal points
         $featMap = [];
         try {
@@ -259,22 +426,26 @@ class PhotoBookBuilder
             $items = [];
             foreach (($page['items'] ?? []) as $it) {
                 $p = $it['photo'] ?? null;
-                if (!$p) { $items[] = $it; continue; }
-                $origLocal = $map[$p->path] ?? null;
+                $pPath = is_array($p) ? ($p['path'] ?? null) : (is_object($p) ? ($p->path ?? null) : null);
+                if (!$pPath) { $items[] = $it; continue; }
+
+                $origLocal = $map[$pPath] ?? null;
                 if (!$origLocal) { $items[] = $it; continue; }
 
                 $s = $slots[$it['slotIndex'] ?? 0] ?? null;
                 if (!$s) { $items[] = $it; continue; }
+
                 $targetW = max(1, (int) round(($s['w'] ?? 1.0) * $pagePxW));
                 $targetH = max(1, (int) round(($s['h'] ?? 1.0) * $pagePxH));
 
                 $ext = strtolower(pathinfo($origLocal, PATHINFO_EXTENSION) ?: 'jpg');
                 $slotLocal = $this->buildSlotRender($origLocal, $ext, $targetW, $targetH, $opt);
 
-                // Use file:/// for Dompdf
+                // file:/// for Dompdf
                 $file = realpath($slotLocal) ?: $slotLocal;
                 $it['src'] = 'file:///' . str_replace('\\', '/', $file);
-                // Build HTTP URL for review UI: /photobook/asset/{hash}/{relative}
+
+                // HTTP URL for review UI
                 $hash = sha1($folder);
                 $prefix = storage_path('app/pdf-exports/_cache/' . $hash . DIRECTORY_SEPARATOR);
                 $prefixNorm = str_replace('\\', '/', realpath($prefix) ?: $prefix);
@@ -285,46 +456,88 @@ class PhotoBookBuilder
                     $it['web'] = route('photobook.asset', ['hash' => $hash, 'path' => $rel]);
                 }
 
-                // Determine focal point (0..1) once per source and set CSS object-position
-                // Respect planner-provided objectPosition if it is meaningful (not default "50% 50%")
-                $hasPlannerPos = isset($it['objectPosition']) && trim((string)$it['objectPosition']) !== '' && trim((string)$it['objectPosition']) !== '50% 50%';
-                if (!$hasPlannerPos) {
-                    $used = false;
-                    // 1) If ML features (faces/saliency) available for this path, prefer them
-                    $feat = $featMap[$p->path] ?? null;
-                    if ($feat) {
-                        if (config('photobook.ml.enable') && config('photobook.ml.faces') && !empty($feat->faces) && is_array($feat->faces)) {
+                // --- NEW: canonical placement defaults (match Python/UI)
+                $fit = ((($it['crop'] ?? null) === 'contain') ? 'contain' : 'cover');
+                $zoom = (isset($it['scale']) && is_numeric($it['scale']) && $it['scale'] > 0) ? floatval($it['scale']) : 1.0;
+                $rotation = (isset($it['rotate']) && is_numeric($it['rotate'])) ? floatval($it['rotate']) : 0.0;
+                $offset = $it['offset'] ?? ['x'=>0.0, 'y'=>0.0];
+
+                // original image size (for fit math)
+                [$iw, $ih] = @getimagesize($origLocal) ?: [0,0];
+                $it['_iw'] = $iw; $it['_ih'] = $ih;
+
+                // choose canonical align
+                $align = null;
+                $feat = $featMap[$pPath] ?? null;
+                if (isset($it['align']) && is_array($it['align']) && isset($it['align']['x']) && isset($it['align']['y'])) {
+                    $align = ['x'=>floatval($it['align']['x']), 'y'=>floatval($it['align']['y'])];
+                } elseif ($feat) {
+                    // Support both array and object feature payloads
+                    if (is_array($feat)) {
+                        if (!empty($feat['faces']) && is_array($feat['faces'])) {
+                            usort($feat['faces'], function($A,$B){
+                                $a = (float) (($A['w'] ?? 0) * ($A['h'] ?? 0));
+                                $b = (float) (($B['w'] ?? 0) * ($B['h'] ?? 0));
+                                return $b <=> $a;
+                            });
+                            $cx = max(0.0, min(1.0, (float) ($feat['faces'][0]['cx'] ?? 0.5)));
+                            $cy = max(0.0, min(1.0, (float) ($feat['faces'][0]['cy'] ?? 0.5)));
+                            $align = $this->focusToAlign($cx, $cy, $targetW, $targetH, $iw, $ih, $fit, $zoom);
+                            $cntFaces++;
+                        } elseif (!empty($feat['saliency']) && is_array($feat['saliency'])) {
+                            $cx = max(0.0, min(1.0, (float) ($feat['saliency']['cx'] ?? 0.5)));
+                            $cy = max(0.0, min(1.0, (float) ($feat['saliency']['cy'] ?? 0.5)));
+                            $align = $this->focusToAlign($cx, $cy, $targetW, $targetH, $iw, $ih, $fit, $zoom);
+                            $cntSaliency++;
+                        }
+                    } else {
+                        // object-like
+                        if (!empty($feat->faces) && is_array($feat->faces)) {
                             $faces = $feat->faces;
                             usort($faces, function($A,$B){
                                 $a = (float) (($A['w'] ?? 0) * ($A['h'] ?? 0));
                                 $b = (float) (($B['w'] ?? 0) * ($B['h'] ?? 0));
                                 return $b <=> $a;
                             });
-                            $cx = (float) ($faces[0]['cx'] ?? 0.5);
-                            $cy = (float) ($faces[0]['cy'] ?? 0.5);
-                            $cx = max(0.0, min(1.0, $cx));
-                            $cy = max(0.0, min(1.0, $cy));
-                            $it['objectPosition'] = ((int) round($cx * 100)) . '% ' . ((int) round($cy * 100)) . '%';
-                            $used = true; $cntFaces++;
-                        } elseif (config('photobook.ml.enable') && config('photobook.ml.saliency') && !empty($feat->saliency) && is_array($feat->saliency)) {
-                            $cx = (float) ($feat->saliency['cx'] ?? 0.5);
-                            $cy = (float) ($feat->saliency['cy'] ?? 0.5);
-                            $cx = max(0.0, min(1.0, $cx));
-                            $cy = max(0.0, min(1.0, $cy));
-                            $it['objectPosition'] = ((int) round($cx * 100)) . '% ' . ((int) round($cy * 100)) . '%';
-                            $used = true; $cntSaliency++;
+                            $cx = max(0.0, min(1.0, (float) ($faces[0]['cx'] ?? 0.5)));
+                            $cy = max(0.0, min(1.0, (float) ($faces[0]['cy'] ?? 0.5)));
+                            $align = $this->focusToAlign($cx, $cy, $targetW, $targetH, $iw, $ih, $fit, $zoom);
+                            $cntFaces++;
+                        } elseif (!empty($feat->saliency) && is_array($feat->saliency)) {
+                            $cx = max(0.0, min(1.0, (float) ($feat->saliency['cx'] ?? 0.5)));
+                            $cy = max(0.0, min(1.0, (float) ($feat->saliency['cy'] ?? 0.5)));
+                            $align = $this->focusToAlign($cx, $cy, $targetW, $targetH, $iw, $ih, $fit, $zoom);
+                            $cntSaliency++;
                         }
-                    }
-                    // 2) Fallback to EXIF SubjectArea / entropy
-                    if (!$used) {
-                        if (!isset($focalCache[$origLocal])) {
-                            $focalCache[$origLocal] = $this->detectFocalPointForFile($origLocal);
-                        }
-                        [$fx, $fy] = $focalCache[$origLocal];
-                        $it['objectPosition'] = ((int) round($fx * 100)) . '% ' . ((int) round($fy * 100)) . '%';
-                        $cntFallback++;
                     }
                 }
+
+                // Legacy objectPosition (from planner or earlier runs)
+                if (!$align) {
+                    $hasPlannerPos = isset($it['objectPosition']) && trim((string)$it['objectPosition']) !== '' && trim((string)$it['objectPosition']) !== '50% 50%';
+                    if ($hasPlannerPos) {
+                        $align = $this->posToAlignLegacy((string)$it['objectPosition'], $targetW, $targetH, $iw, $ih, $fit, $zoom);
+                    }
+                }
+
+                // Fallback via EXIF/entropy
+                if (!$align) {
+                    if (!isset($focalCache[$origLocal])) {
+                        $focalCache[$origLocal] = $this->detectFocalPointForFile($origLocal); // [fx,fy] 0..1
+                    }
+                    [$fx, $fy] = $focalCache[$origLocal];
+                    $align = $this->focusToAlign((float)$fx, (float)$fy, $targetW, $targetH, $iw, $ih, $fit, $zoom);
+                    $cntFallback++;
+                }
+
+                // store canonical
+                $it['fit'] = $fit;
+                $it['align'] = $align;
+                $it['offset'] = (is_array($offset) ? ['x'=>floatval($offset['x']??0), 'y'=>floatval($offset['y']??0)] : ['x'=>0.0,'y'=>0.0]);
+                $it['zoom'] = $zoom;
+                $it['rotation'] = $rotation;
+                $it['auto'] = true;
+
                 $items[] = $it;
             }
             $page['items'] = $items;
@@ -339,7 +552,12 @@ class PhotoBookBuilder
 
         // Helper for Blade to build file:// URLs that Dompdf can read
         $asset_url = function ($photo) use ($map) {
-            $path = $photo->path ?? (is_array($photo) ? ($photo['path'] ?? null) : null);
+            $path = null;
+            if (is_object($photo)) {
+                $path = $photo->path ?? null;
+            } elseif (is_array($photo)) {
+                $path = $photo['path'] ?? null;
+            }
             if (!$path || !isset($map[$path]))
                 return '';
             $file = realpath($map[$path]) ?: $map[$path];
@@ -347,7 +565,7 @@ class PhotoBookBuilder
             return $uri;
         };
 
-        $html = view('photobook.layout', [
+    $html = view('photobook.layout', [
             'options' => $options,
             'pages' => $pages,
             'assetsDir' => $imagesDir,
@@ -362,30 +580,163 @@ class PhotoBookBuilder
 
         \Log::debug('Builder: html built', ['kb' => round(strlen($html) / 1024, 1)]);
 
-        // Export pages.json for debug/inspection
+    // Progress mid-way
+    try { @file_put_contents($cacheRoot . DIRECTORY_SEPARATOR . 'task.status.json', json_encode(['state'=>'running','progress'=>65, 'step' => 'Generating layouts...'])); } catch (\Throwable $e) {}
+
+        // Merge overrides.json (templateId, items, cover) before exporting pages.json
+        try {
+            $ovFile = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.json';
+            $overrides = is_file($ovFile) ? (json_decode(@file_get_contents($ovFile), true) ?: ['pages'=>[]]) : ['pages'=>[]];
+            if (is_array($overrides['pages'] ?? null)) {
+                foreach ($pages as $idx => &$p) {
+                    $pageNo = $idx + 1;
+                    $ov = $overrides['pages'][(string) $pageNo] ?? null;
+                    if (is_array($ov)) {
+                        if (!empty($ov['templateId'])) $p['templateId'] = (string) $ov['templateId'];
+                        if (is_array($ov['items'] ?? null) && !empty($ov['items'])) {
+                            // Build quick map by slotIndex
+                            $bySlot = [];
+                            foreach ($ov['items'] as $itOv) {
+                                $bySlot[(int) ($itOv['slotIndex'] ?? 0)] = $itOv;
+                            }
+                            foreach ($p['items'] as &$it) {
+                                $idxSlot = (int) ($it['slotIndex'] ?? 0);
+                                if (!isset($bySlot[$idxSlot]) || !is_array($bySlot[$idxSlot])) continue;
+
+                                $ovI = $bySlot[$idxSlot];
+                                $changed = false;
+
+                                // Prefer canonical fields if present
+                                foreach (['fit','zoom','rotation','auto'] as $k) {
+                                    if (array_key_exists($k, $ovI)) { $it[$k] = $ovI[$k]; $changed = true; }
+                                }
+                                if (isset($ovI['align']) && is_array($ovI['align'])) { $it['align'] = $ovI['align']; $changed = true; }
+                                if (isset($ovI['offset']) && is_array($ovI['offset'])) { $it['offset'] = $ovI['offset']; $changed = true; }
+
+                                // Legacy compatibility → map to canonical
+                                $s = ($p['slots'] ?? [])[$idxSlot] ?? ['x'=>0,'y'=>0,'w'=>1,'h'=>1];
+                                $targetW = max(1, (int) round(($s['w'] ?? 1.0) * $pagePxW));
+                                $targetH = max(1, (int) round(($s['h'] ?? 1.0) * $pagePxH));
+                                $iw = (int) ($it['_iw'] ?? 0);
+                                $ih = (int) ($it['_ih'] ?? 0);
+                                $fitNow = $it['fit'] ?? ((($it['crop'] ?? null) === 'contain') ? 'contain' : 'cover');
+                                $zoomNow = (isset($it['zoom']) && is_numeric($it['zoom']) && $it['zoom'] > 0) ? floatval($it['zoom']) : 1.0;
+
+                                if (isset($ovI['objectPosition'])) {
+                                    $it['align'] = $this->posToAlignLegacy((string)$ovI['objectPosition'], $targetW, $targetH, $iw, $ih, $fitNow, $zoomNow);
+                                    $changed = true;
+                                }
+                                if (isset($ovI['scale']) && is_numeric($ovI['scale'])) { $it['zoom'] = floatval($ovI['scale']); $changed = true; }
+                                if (isset($ovI['rotate']) && is_numeric($ovI['rotate'])) { $it['rotation'] = floatval($ovI['rotate']); $changed = true; }
+                                if (isset($ovI['crop'])) { $it['fit'] = ($ovI['crop'] === 'contain') ? 'contain' : 'cover'; $changed = true; }
+
+                                // Photo/source change (keep)
+                                if (!empty($ovI['photo'])) { $it['photo'] = $ovI['photo']; $changed = true; }
+                                if (!empty($ovI['src'])) { $it['src'] = $ovI['src']; $changed = true; }
+
+                                if ($changed) { $it['auto'] = false; }
+                            }
+                            unset($it);
+                        }
+                    }
+                }
+                unset($p);
+            }
+        } catch (\Throwable $e) { \Log::warning('Builder: merge overrides failed', ['err'=>$e->getMessage()]); }
+
+        // Export pages.json for debug/inspection (prepend synthetic page 0 for cover)
         try {
             $export = [];
+            // Add cover as page 0 if available
+            if (!empty($options['cover_image_src']) && !empty($options['cover_image'])) {
+                $hash = sha1($folder);
+                $coverRel = (string) $options['cover_image'];
+                $coverSrc = (string) $options['cover_image_src'];
+                $coverWeb = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($coverRel, '/')]);
+                $photoArr = null;
+                if ($coverOrigPhoto && isset($coverOrigPhoto->path)) {
+                    $photoArr = [
+                        'path' => $coverOrigPhoto->path,
+                        'filename' => $coverOrigPhoto->filename ?? basename($coverOrigPhoto->path),
+                        'width' => $coverOrigPhoto->width ?? null,
+                        'height' => $coverOrigPhoto->height ?? null,
+                        'ratio' => $coverOrigPhoto->ratio ?? null,
+                        'takenAt' => isset($coverOrigPhoto->takenAt) ? ($coverOrigPhoto->takenAt?->format(DATE_ATOM)) : null,
+                    ];
+                }
+                $export[] = [
+                    'n' => 0,
+                    'template' => 'generic',
+                    'templateId' => 'cover',
+                    'slots' => [ ['x'=>0,'y'=>0,'w'=>1,'h'=>1] ],
+                    'items' => [[
+                        'slotIndex' => 0,
+                        // legacy cover fields retained
+                        'crop' => 'cover',
+                        'objectPosition' => $options['cover_object_position'] ?? '50% 50%',
+                        // canonical (optional)
+                        'fit' => $options['cover_fit'] ?? 'cover',
+                        'align' => $options['cover_align'] ?? ['x'=>0,'y'=>0],
+                        'offset' => $options['cover_offset'] ?? ['x'=>0,'y'=>0],
+                        'zoom' => isset($options['cover_zoom']) && is_numeric($options['cover_zoom']) ? (float) $options['cover_zoom'] : 1.0,
+                        'rotation' => isset($options['cover_rotation']) && is_numeric($options['cover_rotation']) ? (float) $options['cover_rotation'] : 0.0,
+                        'auto' => (bool) ($options['cover_auto'] ?? true),
+                        'src' => $coverSrc,
+                        'web' => $coverWeb,
+                        'rel' => $coverRel,
+                        'photo' => $photoArr,
+                    ]],
+                ];
+            }
             $pageNo = 0;
             foreach ($pages as $p) {
                 $pageNo++;
                 $outItems = [];
-        foreach (($p['items'] ?? []) as $it) {
+                foreach (($p['items'] ?? []) as $it) {
                     $photo = $it['photo'] ?? null;
+                    $photoArr = null;
+                    if ($photo) {
+                        if (is_object($photo)) {
+                            $photoArr = [
+                                'path' => $photo->path ?? null,
+                                'filename' => $photo->filename ?? null,
+                                'width' => $photo->width ?? null,
+                                'height' => $photo->height ?? null,
+                                'ratio' => $photo->ratio ?? null,
+                                'takenAt' => isset($photo->takenAt) ? ($photo->takenAt?->format(DATE_ATOM)) : null,
+                            ];
+                        } elseif (is_array($photo)) {
+                            $photoArr = [
+                                'path' => $photo['path'] ?? null,
+                                'filename' => $photo['filename'] ?? null,
+                                'width' => $photo['width'] ?? null,
+                                'height' => $photo['height'] ?? null,
+                                'ratio' => $photo['ratio'] ?? null,
+                                'takenAt' => isset($photo['takenAt']) ? (is_string($photo['takenAt']) ? $photo['takenAt'] : null) : null,
+                            ];
+                        }
+                    }
                     $outItems[] = [
                         'slotIndex' => $it['slotIndex'] ?? 0,
-                        'crop' => $it['crop'] ?? 'cover',
+
+                        // --- legacy (kept for compatibility)
+                        'crop' => $it['crop'] ?? (($it['fit'] ?? 'cover') === 'contain' ? 'contain' : 'cover'),
                         'objectPosition' => $it['objectPosition'] ?? '50% 50%',
+
+                        // --- canonical (UI + Python use these)
+                        'fit' => $it['fit'] ?? 'cover',
+                        'align' => $it['align'] ?? ['x'=>0,'y'=>0],
+                        'offset' => $it['offset'] ?? ['x'=>0,'y'=>0],
+                        'zoom' => (isset($it['zoom']) && is_numeric($it['zoom']) && $it['zoom'] > 0) ? floatval($it['zoom']) : 1.0,
+                        'rotation' => (isset($it['rotation']) && is_numeric($it['rotation'])) ? floatval($it['rotation']) : 0.0,
+                        'auto' => (bool) ($it['auto'] ?? true),
+
+                        // assets
                         'src' => $it['src'] ?? null,
-            'web' => $it['web'] ?? null,
-            'rel' => $it['rel'] ?? null,
-                        'photo' => $photo ? [
-                            'path' => $photo->path,
-                            'filename' => $photo->filename,
-                            'width' => $photo->width,
-                            'height' => $photo->height,
-                            'ratio' => $photo->ratio,
-                            'takenAt' => $photo->takenAt?->format(DATE_ATOM),
-                        ] : null,
+                        'web' => $it['web'] ?? null,
+                        'rel' => $it['rel'] ?? null,
+
+                        'photo' => $photoArr,
                     ];
                 }
                 $export[] = [
@@ -402,12 +753,75 @@ class PhotoBookBuilder
                 'count' => count($export),
                 'pages' => $export,
             ];
+            // Persist cover info for UI reuse
+            if (!empty($options['cover_image'] ?? null) || !empty($options['title'] ?? null)) {
+                $pagesJson['cover'] = [
+                    'image' => (string) ($options['cover_image'] ?? ''),
+                    'title' => (string) ($options['title'] ?? ''),
+                ];
+            }
             @file_put_contents($cacheRoot . DIRECTORY_SEPARATOR . 'pages.json', json_encode($pagesJson, JSON_PRETTY_PRINT));
         } catch (\Throwable $e) {
             \Log::debug('Builder: pages.json export failed', ['err' => $e->getMessage()]);
         }
 
-        return [$html, $imagesDir];
+    // Finish progress
+    try { @file_put_contents($cacheRoot . DIRECTORY_SEPARATOR . 'task.status.json', json_encode(['state'=>'finished','progress'=>100,'finishedAt'=>date(DATE_ATOM)])); } catch (\Throwable $e) {}
+
+    return [$html, $imagesDir];
+    }
+
+    /** Canonical fit math: base fit (cover/contain) * zoom, then overflow in px. */
+    private function fitMath(int $slotW, int $slotH, int $iw, int $ih, string $fit, float $zoom): array
+    {
+        if ($iw <= 0 || $ih <= 0 || $slotW <= 0 || $slotH <= 0) {
+            return ['fw'=>$slotW, 'fh'=>$slotH, 'overflowX'=>0.0, 'overflowY'=>0.0, 'scale'=>1.0];
+        }
+        $sx = $slotW / $iw;
+        $sy = $slotH / $ih;
+        $base = ($fit === 'contain') ? min($sx, $sy) : max($sx, $sy);
+        $scale = $base * ($zoom > 0 ? $zoom : 1.0);
+        $fw = $iw * $scale;
+        $fh = $ih * $scale;
+        return [
+            'fw' => $fw, 'fh' => $fh,
+            'overflowX' => max(0.0, $fw - $slotW),
+            'overflowY' => max(0.0, $fh - $slotH),
+            'scale' => $scale,
+        ];
+    }
+
+    /** Focus (cx,cy in [0..1] image coords) → align {-1..1} so focus lands at slot center. */
+    private function focusToAlign(float $cx, float $cy, int $slotW, int $slotH, int $iw, int $ih, string $fit='cover', float $zoom=1.0): array
+    {
+        $m = $this->fitMath($slotW, $slotH, $iw, $ih, $fit, $zoom);
+        $fx = $cx * $m['fw']; $fy = $cy * $m['fh'];
+        $panX = $fx - $m['fw'] / 2.0;  // px
+        $panY = $fy - $m['fh'] / 2.0;  // px
+        $ox = $m['overflowX']; $oy = $m['overflowY'];
+        $ax = ($ox <= 1e-6) ? 0.0 : max(-1.0, min(1.0, $panX / ($ox / 2.0)));
+        $ay = ($oy <= 1e-6) ? 0.0 : max(-1.0, min(1.0, $panY / ($oy / 2.0)));
+        return ['x' => $ax, 'y' => $ay];
+    }
+
+    /**
+     * Legacy CSS background-position "X% Y%" → canonical align (-1..1).
+     * For overrides migrating from old UI.
+     */
+    private function posToAlignLegacy(string $pos, int $slotW, int $slotH, int $iw, int $ih, string $fit, float $zoom): array
+    {
+        $m = $this->fitMath($slotW, $slotH, $iw, $ih, $fit, $zoom);
+        // Treat 0..100% as linear over the overflow extent. 50% = center = 0 align.
+        // When there's no overflow on an axis, align is 0 on that axis.
+        $parts = preg_split('/\s+/', trim($pos));
+        $px = isset($parts[0]) ? floatval(rtrim($parts[0], '%')) : 50.0;
+        $py = isset($parts[1]) ? floatval(rtrim($parts[1], '%')) : 50.0;
+        $ax = ($m['overflowX'] <= 1e-6) ? 0.0 : (($px / 100.0) * 2.0 - 1.0); // map 0..100 → -1..1
+        $ay = ($m['overflowY'] <= 1e-6) ? 0.0 : (($py / 100.0) * 2.0 - 1.0);
+        // clamp
+        $ax = max(-1.0, min(1.0, $ax));
+        $ay = max(-1.0, min(1.0, $ay));
+        return ['x'=>$ax,'y'=>$ay];
     }
 
     /**

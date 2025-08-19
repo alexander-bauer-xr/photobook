@@ -4,9 +4,7 @@ Simple sidebar with page info, swap item up/down, replace stub, and quick templa
 */
 import React from 'react';
 import { useSelection } from '../state/selection';
-import type { PageJson } from '../api/types';
-
-type Props = { page: PageJson; onSwap: (a:number,b:number)=>void; onReplace:(i:number)=>void; onTemplateChange:(id:string)=>void };
+type Props = { page: any; onSwap: (a:number,b:number)=>void; onReplace:(i:number)=>void; onTemplateChange:(id:string)=>void };
 
 export default function Sidebar({ page, onSwap, onReplace, onTemplateChange }: Props) {
   const { setSelected } = useSelection();

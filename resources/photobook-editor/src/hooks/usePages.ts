@@ -1,15 +1,3 @@
-/*
-Copilot prompt:
-usePages(folder?) using TanStack Query. Key: ['pages', folder||'default'].
-*/
-import { useQuery } from '@tanstack/react-query';
-import { api } from '../api/client';
-
-export function usePages(folder?: string) {
-  const f = folder || '';
-  return useQuery({
-    queryKey: ['pages', f || 'default'],
-    queryFn: () => api.getPages(f),
-    enabled: !!f,
-  });
-}
+// Backward-compatible alias to the consolidated photobook hook
+// This ensures components importing { usePages } get the stateful version with overrides hydration.
+export { usePhotobook as usePages } from './usePhotobook';

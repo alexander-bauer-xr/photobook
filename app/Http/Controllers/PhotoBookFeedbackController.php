@@ -98,8 +98,10 @@ class PhotoBookFeedbackController extends Controller
     {
         $folder = (string) $request->input('folder', Config::get('photobook.folder'));
         $page = (int) $request->input('page');
-        $order = (array) $request->input('order', []);   // array of photo paths in new order
-        $slots = (array) $request->input('slots', []);   // slotIndex => { pos:[fx,fy], zoom:number, path?:string }
+    $order = (array) $request->input('order', []);   // legacy: array of photo paths
+    $slots = (array) $request->input('slots', []);   // legacy: slotIndex => { pos:[fx,fy], zoom:number, path?:string }
+    $items = $request->input('items');               // new: full items array with slotIndex/objectPosition/scale/rotate/photo/src
+    $templateId = $request->input('templateId');     // optional template override
 
         if ($page < 1)
             return response()->json(['ok' => false, 'error' => 'Invalid page'], 422);
@@ -110,10 +112,38 @@ class PhotoBookFeedbackController extends Controller
         $file = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.json';
         $data = is_file($file) ? (json_decode(@file_get_contents($file), true) ?: ['pages' => []]) : ['pages' => []];
 
-        $data['pages'][(string) $page] = [
-            'order' => $order ?: null,
-            'slots' => $slots ?: null,
-        ];
+        $entry = $data['pages'][(string) $page] ?? [];
+        // Keep legacy fields for backward compatibility
+        if (!empty($order)) $entry['order'] = $order;
+        if (!empty($slots)) $entry['slots'] = $slots;
+        // New format: items array
+        if (is_array($items)) {
+            $norm = [];
+            foreach ($items as $it) {
+                if (!is_array($it)) continue;
+                $out = [
+                    'slotIndex' => (int) ($it['slotIndex'] ?? 0),
+                ];
+                foreach (['crop','objectPosition','src'] as $k) if (isset($it[$k])) $out[$k] = $it[$k];
+                if (isset($it['scale'])) $out['scale'] = (float) $it['scale'];
+                if (isset($it['rotate'])) $out['rotate'] = (float) $it['rotate'];
+                if (!empty($it['photo']) && is_array($it['photo'])) {
+                    $ph = $it['photo'];
+                    $out['photo'] = [
+                        'path' => (string) ($ph['path'] ?? ''),
+                        'filename' => (string) ($ph['filename'] ?? ''),
+                        'width' => $ph['width'] ?? null,
+                        'height' => $ph['height'] ?? null,
+                        'ratio' => $ph['ratio'] ?? null,
+                        'takenAt' => $ph['takenAt'] ?? null,
+                    ];
+                }
+                $norm[] = $out;
+            }
+            if (!empty($norm)) $entry['items'] = $norm;
+        }
+        if (is_string($templateId) && $templateId !== '') $entry['templateId'] = $templateId;
+        $data['pages'][(string) $page] = $entry;
 
         @file_put_contents($file, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         return response()->json(['ok' => true]);

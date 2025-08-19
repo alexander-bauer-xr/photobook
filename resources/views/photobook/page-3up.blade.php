@@ -9,8 +9,12 @@
            height: calc(100% - var(--eps-mm));
            padding: calc(var(--gap-mm)/2);
          ">
-      @php $src = $asset_url($photos[0]); @endphp
-      <div class="img" aria-label="{{ $photos[0]->filename }}"
+      @php
+        $src = $asset_url($photos[0]);
+        $p = $photos[0] ?? null;
+        $label = is_object($p) ? ($p->filename ?? basename($p->path ?? '')) : (is_array($p) ? ($p['filename'] ?? basename($p['path'] ?? '')) : '');
+      @endphp
+      <div class="img" aria-label="{{ $label }}"
            style="background-image:url('{{ $src }}'); background-position:center center;"></div>
     </div>
 
@@ -23,8 +27,12 @@
            height: calc(100% - var(--eps-mm));
            padding: calc(var(--gap-mm)/2);
          ">
-      @php $src = $asset_url($photos[1]); @endphp
-      <div class="img" aria-label="{{ $photos[1]->filename }}"
+      @php
+        $src = $asset_url($photos[1]);
+        $p = $photos[1] ?? null;
+        $label = is_object($p) ? ($p->filename ?? basename($p->path ?? '')) : (is_array($p) ? ($p['filename'] ?? basename($p['path'] ?? '')) : '');
+      @endphp
+      <div class="img" aria-label="{{ $label }}"
            style="background-image:url('{{ $src }}'); background-position:center center;"></div>
     </div>
 
@@ -37,8 +45,12 @@
            height: calc(100% - var(--eps-mm));
            padding: calc(var(--gap-mm)/2);
          ">
-      @php $src = $asset_url($photos[2]); @endphp
-      <div class="img" aria-label="{{ $photos[2]->filename }}"
+      @php
+        $src = $asset_url($photos[2]);
+        $p = $photos[2] ?? null;
+        $label = is_object($p) ? ($p->filename ?? basename($p->path ?? '')) : (is_array($p) ? ($p['filename'] ?? basename($p['path'] ?? '')) : '');
+      @endphp
+      <div class="img" aria-label="{{ $label }}"
            style="background-image:url('{{ $src }}'); background-position:center center;"></div>
     </div>
   </div>
