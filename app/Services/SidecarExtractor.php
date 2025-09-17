@@ -11,8 +11,10 @@ class SidecarExtractor
     public function prepareWorkdir(string $folder): string
     {
         $root = storage_path('app/pdf-exports/_ml/' . sha1($folder));
-        if (!is_dir($root)) @mkdir($root, 0775, true);
-        if (!is_dir($root . '/images')) @mkdir($root . '/images', 0775, true);
+        if (!is_dir($root))
+            @mkdir($root, 0775, true);
+        if (!is_dir($root . '/images'))
+            @mkdir($root . '/images', 0775, true);
         return $root;
     }
 
@@ -31,7 +33,9 @@ class SidecarExtractor
         }
 
         $disk = Storage::disk('nextcloud');
-        $downloaded = 0; $reused = 0; $errors = 0;
+        $downloaded = 0;
+        $reused = 0;
+        $errors = 0;
         foreach ($photos as $p) {
             $ext = pathinfo($p->filename ?? basename($p->path), PATHINFO_EXTENSION);
             $name = sha1($p->path) . ($ext ? ('.' . strtolower($ext)) : '');
@@ -45,7 +49,8 @@ class SidecarExtractor
                             stream_copy_to_stream($stream, $out);
                             fclose($out);
                         }
-                        if (is_resource($stream)) @fclose($stream);
+                        if (is_resource($stream))
+                            @fclose($stream);
                         if (!is_file($local) || filesize($local) <= 0) {
                             @unlink($local);
                             $errors++;
@@ -85,8 +90,11 @@ class SidecarExtractor
             $timeoutSeconds
         );
         $proc->run(function ($type, $buffer) {
-            if ($type === Process::OUT) { \Log::debug('Sidecar:out ' . trim($buffer)); }
-            else { \Log::debug('Sidecar:err ' . trim($buffer)); }
+            if ($type === Process::OUT) {
+                \Log::debug('Sidecar:out ' . trim($buffer));
+            } else {
+                \Log::debug('Sidecar:err ' . trim($buffer));
+            }
         });
         return $proc->getExitCode() ?? 1;
     }
@@ -94,22 +102,36 @@ class SidecarExtractor
     /** Import JSONL file into photo_features table using FeatureRepository. */
     public function importJsonl(string $jsonlPath, FeatureRepository $repo): array
     {
-        $imported = 0; $errors = 0;
+        $imported = 0;
+        $errors = 0;
         $fh = @fopen($jsonlPath, 'r');
-        if ($fh === false) return ['imported' => 0, 'errors' => 1];
+        if ($fh === false)
+            return ['imported' => 0, 'errors' => 1];
         while (!feof($fh)) {
             $line = fgets($fh);
-            if ($line === false) break;
+            if ($line === false)
+                break;
             $line = trim($line);
-            if ($line === '') continue;
+            if ($line === '')
+                continue;
             $obj = json_decode($line, true);
-            if (!is_array($obj) || empty($obj['path'])) { $errors++; continue; }
-            if (!empty($obj['error'])) { $errors++; continue; }
+            if (!is_array($obj) || empty($obj['path'])) {
+                $errors++;
+                continue;
+            }
+            if (!empty($obj['error'])) {
+                $errors++;
+                continue;
+            }
             $data = [];
-            if (array_key_exists('faces', $obj)) $data['faces'] = $obj['faces'];
-            if (array_key_exists('saliency', $obj)) $data['saliency'] = $obj['saliency'];
-            if (array_key_exists('aesthetic', $obj)) $data['aesthetic'] = $obj['aesthetic'];
-            if (array_key_exists('horizon_deg', $obj)) $data['horizon_deg'] = $obj['horizon_deg'];
+            if (array_key_exists('faces', $obj))
+                $data['faces'] = $obj['faces'];
+            if (array_key_exists('saliency', $obj))
+                $data['saliency'] = $obj['saliency'];
+            if (array_key_exists('aesthetic', $obj))
+                $data['aesthetic'] = $obj['aesthetic'];
+            if (array_key_exists('horizon_deg', $obj))
+                $data['horizon_deg'] = $obj['horizon_deg'];
             try {
                 if (!empty($data)) {
                     $repo->upsert((string) $obj['path'], $data);

@@ -99,7 +99,12 @@ type AnyItem = {
   _error?: boolean;           // load error
 };
 
-type Page = { n: number; slots: Slot[]; items: AnyItem[] };
+type Page = {
+  n: number;
+  slots: Slot[];
+  items: AnyItem[];
+  templateId?: string;   // <--- add this
+};
 
 type SaveOverride = {
   page: number;
@@ -175,27 +180,52 @@ function validateItem(it: AnyItem): string[] {
   return errs;
 }
 
-function buildOverridesPayload(pageNumber: number, items: AnyItem[]) {
+function buildOverridesPayload(
+  pageNumber: number,
+  templateId: string | undefined,
+  items: AnyItem[]
+) {
   const pageKey = String(pageNumber);
+  const normalized = items.map(normalizeItem);
+
+  const itemsOut = normalized
+    .slice()
+    .sort((a, b) => a.slotIndex - b.slotIndex)
+    .map(it => {
+      const fit: Fit = it.fit === 'contain' ? 'contain' : 'cover';
+      const align = { x: clamp(Number(it.align?.x ?? 0), -1, 1), y: clamp(Number(it.align?.y ?? 0), -1, 1) };
+      const offset = { x: Number(it.offset?.x) || 0, y: Number(it.offset?.y) || 0 };
+      const zoom = isFinitePos(it.zoom) ? Number(it.zoom) : 1;
+      const rotation = Number.isFinite(Number(it.rotation)) ? ((Number(it.rotation) % 360) + 360) % 360 : 0;
+
+      const canon = {
+        slotIndex: it.slotIndex,
+        fit, align, offset, zoom, rotation,
+        auto: it.auto === true,
+        ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {}),
+      };
+
+      const legacy = {
+        crop: fit,
+        objectPosition: `${Math.round(50 + align.x * 50)}% ${Math.round(50 + align.y * 50)}%`,
+        scale: zoom,
+        rotate: rotation,
+      };
+
+      const maybeSrc = (it as any).web ?? (it as any).webSrc ?? (it as any).src
+        ? { src: (it as any).web ?? (it as any).webSrc ?? (it as any).src }
+        : {};
+
+      return { ...canon, ...legacy, ...maybeSrc };
+    });
+
   return {
     pages: {
-      [pageKey]: {
-        // Persist legacy shape expected by PHP builder (and our web save endpoint)
-        items: items.map(it => ({
-          slotIndex: it.slotIndex,
-          crop: (it.fit === 'contain' ? 'contain' : 'cover'),
-          objectPosition: (() => {
-            const ax = clamp(it.align?.x ?? 0, -1, 1);
-            const ay = clamp(it.align?.y ?? 0, -1, 1);
-            return `${Math.round(50 + ax * 50)}% ${Math.round(50 + ay * 50)}%`;
-          })(),
-          scale: (isFinite(it.zoom as any) && (it.zoom as any) > 0) ? Number(it.zoom) : 1,
-          rotate: Number.isFinite(it.rotation) ? Number(it.rotation) : 0,
-          auto: it.auto === true,
-          ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {})
-        }))
-      }
-    }
+      [String(pageNumber)]: {
+        ...(templateId ? { templateId } : {}), // include if set
+        items: itemsOut,
+      },
+    },
   };
 }
 
@@ -305,7 +335,8 @@ export default function EditorCanvas({
         const errs = normalized.map(validateItem);
         const bad = errs.find(e => e.length);
         if (bad) throw new Error('validation failed: ' + JSON.stringify(errs));
-        const payload = buildOverridesPayload(page.n, normalized);
+        const payload = buildOverridesPayload(page.n, page.templateId, normalized);
+        console.log('POST overrides payload →', payload);
         await postOverrides(saveUrl, payload, saveFetchInit);
         setSaveState('saved');
         setTimeout(() => setSaveState('idle'), 1200);
@@ -319,40 +350,43 @@ export default function EditorCanvas({
 
   // Manueller Save
   const handleSave = useCallback(async () => {
-    try {
-      const normalized = items.map(normalizeItem);
-      const errs = normalized.map(validateItem);
-      const bad = errs.find(e => e.length);
-      if (bad) throw new Error('validation failed: ' + JSON.stringify(errs));
+  try {
+    const normalized = items.map(normalizeItem);
+    const errs = normalized.map(validateItem);
+    const bad = errs.find(e => e.length);
+    if (bad) throw new Error('validation failed: ' + JSON.stringify(errs));
 
-      // Call parent onSave with legacy-shaped items for compatibility
-      const legacyItems = normalized.map(it => ({
-        slotIndex: it.slotIndex,
-        crop: (it.fit === 'contain' ? 'contain' : 'cover'),
-        objectPosition: (() => {
-          const ax = clamp(it.align?.x ?? 0, -1, 1);
-          const ay = clamp(it.align?.y ?? 0, -1, 1);
-          return `${Math.round(50 + ax * 50)}% ${Math.round(50 + ay * 50)}%`;
-        })(),
-        scale: (isFinite(it.zoom as any) && (it.zoom as any) > 0) ? Number(it.zoom) : 1,
-        rotate: Number.isFinite(it.rotation) ? Number(it.rotation) : 0,
-        photo: it.photo ? { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } : null,
-        src: (it as any).webSrc || (it as any).web || (it as any).src || null,
-      }));
-      onSave?.(legacyItems as any);
-
-      if (saveUrl) {
-        setSaveState('saving');
-        const payload = buildOverridesPayload(page.n, normalized);
-        await postOverrides(saveUrl, payload, saveFetchInit);
-        setSaveState('saved');
-        setTimeout(() => setSaveState('idle'), 1200);
-      }
-    } catch (e) {
-      console.error(e);
-      setSaveState('error');
+    // Optional: keep legacy callback for older listeners
+    if (onSave) {
+      const legacyItems = normalized.map(it => {
+        const ax = clamp(it.align?.x ?? 0, -1, 1);
+        const ay = clamp(it.align?.y ?? 0, -1, 1);
+        return {
+          slotIndex: it.slotIndex,
+          crop: (it.fit === 'contain' ? 'contain' : 'cover'),
+          objectPosition: `${Math.round(50 + ax * 50)}% ${Math.round(50 + ay * 50)}%`,
+          scale: isFinitePos(it.zoom) ? Number(it.zoom) : 1,
+          rotate: Number.isFinite(Number(it.rotation)) ? Number(it.rotation) : 0,
+          photo: it.photo ? { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } : null,
+          src: (it as any).web ?? (it as any).webSrc ?? (it as any).src ?? null,
+        };
+      });
+      onSave(legacyItems as any);
     }
-  }, [items, onSave, page.n, saveUrl, saveFetchInit]);
+
+    if (saveUrl) {
+      setSaveState('saving');
+      const payload = buildOverridesPayload(page.n, page.templateId, normalized);
+      console.log('POST overrides payload →', payload);
+      await postOverrides(saveUrl, payload, saveFetchInit);
+      setSaveState('saved');
+      setTimeout(() => setSaveState('idle'), 1200);
+    }
+  } catch (e) {
+    console.error(e);
+    setSaveState('error');
+  }
+}, [items, onSave, page.n, saveUrl, saveFetchInit]);
 
   // Keyboard Shortcuts & Nudge & Undo/Redo
   useEffect(() => {

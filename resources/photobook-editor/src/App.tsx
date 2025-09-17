@@ -21,13 +21,13 @@ import { PB } from './lib/api';
 const qc = new QueryClient();
 
 export default function App() {
-  return <QueryClientProvider client={qc}><Root/></QueryClientProvider>;
+  return <QueryClientProvider client={qc}><Root /></QueryClientProvider>;
 }
 
 function Root() {
   const [folder, setFolder] = useState('');
   const [pageIdx, setPageIdx] = useState(0);
-  const [albums, setAlbums] = useState([] as {hash:string;folder:string;count:number;created_at:string}[]);
+  const [albums, setAlbums] = useState([] as { hash: string; folder: string; count: number; created_at: string }[]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerIdx, setDrawerIdx] = useState(null as number | null);
   const [candidates, setCandidates] = useState([] as { path: string; filename: string; src?: string | null }[]);
@@ -42,8 +42,8 @@ function Root() {
   const [buildProgress, setBuildProgress] = useState(0);
   const [buildMessage, setBuildMessage] = useState('');
   const progressTimer = useRef<number | null>(null);
-  useEffect(()=>{ api.getAlbums().then(r=> setAlbums(r?.albums || [])).catch(()=>{}); },[]);
-  useEffect(()=>{
+  useEffect(() => { api.getAlbums().then(r => setAlbums(r?.albums || [])).catch(() => { }); }, []);
+  useEffect(() => {
     if (albums.length === 0) return;
     const has = albums.some(a => (a.folder || a.hash) === folder);
     if (!folder || !has) {
@@ -77,7 +77,7 @@ function Root() {
     return `/photobook/asset/${encodeURIComponent(hash)}/${encRel}`;
   };
   // Hydrate cover from REST if present
-  useEffect(()=>{
+  useEffect(() => {
     const data: any = (q as any)?.data;
     const cov = data?.cover;
     const currentAlbum = albums.find(a => (a.folder || a.hash) === folder) || null;
@@ -119,47 +119,89 @@ function Root() {
 
   const page = useMemo(() => {
     if (!displayPages.length) return null;
-    return displayPages[Math.max(0, Math.min(pageIdx, displayPages.length-1))] as any;
+    return displayPages[Math.max(0, Math.min(pageIdx, displayPages.length - 1))] as any;
   }, [displayPages, pageIdx]) as any;
 
-  const currentAlbum = useMemo(()=> albums.find(a => (a.folder || a.hash) === folder) || null, [albums, folder]);
+  const currentAlbum = useMemo(() => albums.find(a => (a.folder || a.hash) === folder) || null, [albums, folder]);
   const albumHash = currentAlbum?.hash || '';
 
-  const updateItemObjectPos = (idx:number,xPct:number,yPct:number)=>{
+  const updateItemObjectPos = (idx: number, xPct: number, yPct: number) => {
     if (!page) return;
-    const clamp=(v:number)=>Math.max(0,Math.min(100,Math.round(v)));
-    page.items[idx] = { ...page.items[idx], objectPosition: `${clamp(xPct)}% ${clamp(yPct)}%` };
+    const clampPct = (v: number) => Math.max(0, Math.min(100, Math.round(v)));
+    const px = clampPct(xPct);
+    const py = clampPct(yPct);
+    const ax = (px - 50) / 50; // -> [-1..1]
+    const ay = (py - 50) / 50;
+
+    const prev = page.items[idx];
+    page.items[idx] = {
+      ...prev,
+      // legacy mirror
+      objectPosition: `${px}% ${py}%`,
+      // canonical (what PHP prefers)
+      align: { x: ax, y: ay },
+      auto: false,
+    };
+    setPageVersion(v => v + 1);
   };
 
-  const swapItems=(a:number,b:number)=>{
+  const swapItems = (a: number, b: number) => {
     if (!page) return;
-    const arr=[...page.items];
+    const arr = [...page.items];
     // swap array positions
-    [arr[a],arr[b]]=[arr[b],arr[a]];
+    [arr[a], arr[b]] = [arr[b], arr[a]];
     // reassign slotIndex to match new order (item i goes to slot i)
-    page.items = arr.map((it,i)=> ({ ...it, slotIndex: i }));
-  setPageVersion(v=>v+1);
+    page.items = arr.map((it, i) => ({ ...it, slotIndex: i }));
+    setPageVersion(v => v + 1);
   };
 
-  const save=async ()=>{
+  const clamp01 = (v: number, lo = -1, hi = 1) => Math.max(lo, Math.min(hi, v));
+  const isPos = (v: any) => Number.isFinite(v) && v > 0;
+
+  const save = async () => {
     if (!page) return;
+
     await api.savePage({
-      folder, page: page.n,
-      items: page.items.map(it => ({
-        slotIndex: it.slotIndex,
-        crop: it.crop || 'cover',
-        objectPosition: it.objectPosition || '50% 50%',
-        scale: (typeof it.scale === 'number' && isFinite(it.scale) && it.scale > 0) ? it.scale : 1,
-  rotate: (typeof (it as any).rotate === 'number' && isFinite((it as any).rotate)) ? (it as any).rotate : 0,
-        photo: it.photo ? {
-          path: it.photo.path, filename: it.photo.filename,
-          width: it.photo.width ?? null, height: it.photo.height ?? null,
-          ratio: it.photo.ratio ?? null, takenAt: it.photo.takenAt ?? null
-        } : null,
-        src: it.src,
-      })),
+      folder,
+      page: page.n,
+      items: page.items.map((it: any) => {
+        // canonical (preferred by PHP builder)
+        const fit = it.fit === 'contain' ? 'contain' : 'cover';
+        const align = {
+          x: clamp01(Number(it.align?.x ?? 0)),
+          y: clamp01(Number(it.align?.y ?? 0)),
+        };
+        const offset = {
+          x: Number.isFinite(Number(it.offset?.x)) ? Number(it.offset?.x) : 0,
+          y: Number.isFinite(Number(it.offset?.y)) ? Number(it.offset?.y) : 0,
+        };
+        const zoom = isPos(it.zoom) ? Number(it.zoom) : (isPos(it.scale) ? Number(it.scale) : 1);
+        const rotation = Number.isFinite(Number(it.rotation))
+          ? Number(it.rotation)
+          : (Number.isFinite(Number(it.rotate)) ? Number(it.rotate) : 0);
+        const auto = !!it.auto;
+
+        // legacy (keep for back-compat)
+        const objectPosition = `${Math.round(50 + align.x * 50)}% ${Math.round(50 + align.y * 50)}%`;
+
+        return {
+          slotIndex: it.slotIndex,
+
+          // --- canonical ---
+          fit, align, offset, zoom, rotation, auto,
+          ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {}),
+          ...(it.src ? { src: it.src } : {}),
+
+          // --- legacy ---
+          crop: fit,
+          objectPosition,
+          scale: zoom,
+          rotate: rotation,
+        };
+      }),
       templateId: page.templateId || null,
     });
+
     alert('Saved page overrides');
   };
 
@@ -178,33 +220,56 @@ function Root() {
     }
   };
 
-  const applyReplacement = (cand: { path: string; filename: string; src?: string | null }, opts?: { preserveCrop?: boolean }) => {
+  const applyReplacement = (
+    cand: { path: string; filename: string; src?: string | null },
+    opts?: { preserveCrop?: boolean }
+  ) => {
     if (drawerIdx === null) return;
-    // Cover selection updates only synthetic cover state
+
+    // Cover: only update the synthetic cover state
     if (pageIdx === 0) {
-      // Restrict to candidates; take their asset URL and infer relative path for saving
       const web = cand.src || null;
       const rel = webAssetRelFromUrl(web);
       setCoverPath(rel);
       setCoverWebSrc(web);
       setDrawerOpen(false);
-      setPageVersion(v=>v+1);
+      setPageVersion(v => v + 1);
       return;
     }
+
     if (!page) return;
     const it = page.items[drawerIdx];
     const derived = cand.src || filePathToAssetUrl(cand.path) || it.src || null;
+
+    const preserve = !!opts?.preserveCrop;
+
     page.items[drawerIdx] = {
       ...it,
-      photo: { ...(it.photo||{} as any), path: cand.path, filename: cand.filename },
+      photo: { ...(it.photo || {} as any), path: cand.path, filename: cand.filename },
       src: derived || undefined,
-      objectPosition: opts?.preserveCrop ? it.objectPosition : '50% 50%',
-      scale: opts?.preserveCrop ? (it.scale ?? 1) : 1,
+
+      // legacy
+      objectPosition: preserve ? it.objectPosition : '50% 50%',
+      scale: preserve ? (it.scale ?? 1) : 1,
+
+      // canonical (important!)
+      fit: preserve ? (it.fit || 'cover') : 'cover',
+      align: preserve ? (it.align || { x: 0, y: 0 }) : { x: 0, y: 0 },
+      offset: preserve ? (it.offset || { x: 0, y: 0 }) : { x: 0, y: 0 },
+      zoom: preserve ? (Number(it.zoom) || 1) : 1,
+      rotation: preserve ? (Number(it.rotation) || 0) : 0,
+      auto: false,
     };
-    try { (page.items[drawerIdx] as any).web = derived || undefined; (page.items[drawerIdx] as any).webSrc = derived || undefined; } catch {}
+
+    try {
+      (page.items[drawerIdx] as any).web = derived || undefined;
+      (page.items[drawerIdx] as any).webSrc = derived || undefined;
+    } catch { }
+
     setDrawerOpen(false);
-    setPageVersion(v=>v+1);
+    setPageVersion(v => v + 1);
   };
+
 
   if (q.isLoading) return <div className="p-6">Loading…</div>;
   if (q.isError) return <div className="p-6 text-red-600">Failed to load pages.json</div>;
@@ -214,21 +279,21 @@ function Root() {
     <div className="h-screen flex">
       <main className="flex-1 p-4 flex flex-col gap-3">
         <header className="flex items-center gap-3">
-          <input className="border border-neutral-300 rounded px-2 py-1" value={folder} onChange={e=>setFolder(e.target.value)} placeholder="Folder" />
-          <button className="px-3 py-1 bg-neutral-800 text-white rounded" onClick={()=>q.refetch()}>Load</button>
-          <select aria-label="Albums" className="border border-neutral-300 rounded px-2 py-1" value={folder} onChange={e=>{ setFolder(e.target.value); setPageIdx(0); }}>
+          <input className="border border-neutral-300 rounded px-2 py-1" value={folder} onChange={e => setFolder(e.target.value)} placeholder="Folder" />
+          <button className="px-3 py-1 bg-neutral-800 text-white rounded" onClick={() => q.refetch()}>Load</button>
+          <select aria-label="Albums" className="border border-neutral-300 rounded px-2 py-1" value={folder} onChange={e => { setFolder(e.target.value); setPageIdx(0); }}>
             <option value="">Select album…</option>
-            {albums.map(a=> (
-              <option key={a.hash} value={a.folder || a.hash}>{(a.folder||a.hash)} ({a.count})</option>
+            {albums.map(a => (
+              <option key={a.hash} value={a.folder || a.hash}>{(a.folder || a.hash)} ({a.count})</option>
             ))}
           </select>
           <div className="flex items-center gap-2 ml-6">
-            <button disabled={pageIdx<=0} className="px-3 py-1 rounded bg-neutral-200 disabled:opacity-50" onClick={()=>setPageIdx(p=>Math.max(0,p-1))}>Prev</button>
-            <div className="text-sm">{pageIdx===0 ? 'Cover' : `Page ${page.n}`}</div>
-            <button disabled={displayPages.length<=pageIdx+1} className="px-3 py-1 rounded bg-neutral-200 disabled:opacity-50" onClick={()=>setPageIdx(p=>p+1)}>Next</button>
+            <button disabled={pageIdx <= 0} className="px-3 py-1 rounded bg-neutral-200 disabled:opacity-50" onClick={() => setPageIdx(p => Math.max(0, p - 1))}>Prev</button>
+            <div className="text-sm">{pageIdx === 0 ? 'Cover' : `Page ${page.n}`}</div>
+            <button disabled={displayPages.length <= pageIdx + 1} className="px-3 py-1 rounded bg-neutral-200 disabled:opacity-50" onClick={() => setPageIdx(p => p + 1)}>Next</button>
           </div>
-          <button className="ml-auto px-3 py-1 rounded bg-blue-600 text-white" onClick={async ()=>{
-            if (pageIdx===0) {
+          <button className="ml-auto px-3 py-1 rounded bg-blue-600 text-white" onClick={async () => {
+            if (pageIdx === 0) {
               if (!page) return;
               // Persist cover choice into page 1 overrides (legacy save)
               await api.savePage({
@@ -245,11 +310,11 @@ function Root() {
             } else {
               await save();
             }
-          }}>{pageIdx===0 ? 'Save cover' : 'Save'}</button>
+          }}>{pageIdx === 0 ? 'Save cover' : 'Save'}</button>
           <button
             className="px-3 py-1 rounded bg-green-600 text-white disabled:opacity-60"
             disabled={!folder || isBuilding}
-            onClick={async ()=>{
+            onClick={async () => {
               if (!folder) {
                 alert('Select a folder to build');
                 return;
@@ -257,21 +322,21 @@ function Root() {
               try {
                 // Persist cover via REST if available and albumHash exists
                 if (albumHash && /^[a-f0-9]{40}$/i.test(albumHash)) {
-                  try { await PB.setCover(albumHash, { title: coverTitle || '', image: coverPath || null }); } catch {}
+                  try { await PB.setCover(albumHash, { title: coverTitle || '', image: coverPath || null }); } catch { }
                 }
-                
+
                 // Use the existing build endpoint that already works
                 setIsBuilding(true); setBuildProgress(0); setBuildMessage('Starting build...');
-                
+
                 const formData = new FormData();
                 formData.append('folder', folder);
                 if (coverTitle) formData.append('title', coverTitle);
                 if (coverPath) formData.append('cover_image', coverPath);
-                
+
                 // Add CSRF token
                 const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
                 if (csrfToken) formData.append('_token', csrfToken);
-                
+
                 const buildResponse = await fetch('/photobook/build', {
                   method: 'POST',
                   body: formData,
@@ -280,13 +345,13 @@ function Root() {
                   },
                   credentials: 'same-origin'
                 });
-                
+
                 if (!buildResponse.ok) {
                   throw new Error('Build request failed');
                 }
-                
+
                 setBuildMessage('Build started successfully');
-                
+
                 // If we have albumHash, poll for progress
                 if (albumHash && /^[a-f0-9]{40}$/i.test(albumHash)) {
                   if (progressTimer.current) { window.clearInterval(progressTimer.current); progressTimer.current = null; }
@@ -301,14 +366,14 @@ function Root() {
                         if (progressTimer.current) { window.clearInterval(progressTimer.current); progressTimer.current = null; }
                         setIsBuilding(false);
                         setBuildMessage('Build complete!');
-                        setTimeout(()=> setBuildMessage(''), 2000);
+                        setTimeout(() => setBuildMessage(''), 2000);
                         q.refetch();
                       }
                     } catch (e) {
                       if (progressTimer.current) { window.clearInterval(progressTimer.current); progressTimer.current = null; }
                       setIsBuilding(false);
                       setBuildMessage('Build completed (progress unavailable)');
-                      setTimeout(()=> setBuildMessage(''), 2000);
+                      setTimeout(() => setBuildMessage(''), 2000);
                     }
                   }, 1000);
                 } else {
@@ -316,14 +381,14 @@ function Root() {
                   setTimeout(() => {
                     setIsBuilding(false);
                     setBuildMessage('Build started - check logs');
-                    setTimeout(()=> setBuildMessage(''), 2000);
+                    setTimeout(() => setBuildMessage(''), 2000);
                   }, 2000);
                 }
-                
+
               } catch (e) {
                 setIsBuilding(false);
                 setBuildMessage('Build failed to start');
-                setTimeout(()=> setBuildMessage(''), 2000);
+                setTimeout(() => setBuildMessage(''), 2000);
               }
             }}
           >{isBuilding ? `Building… ${Math.round(buildProgress)}%` : 'Build'}</button>
@@ -336,11 +401,11 @@ function Root() {
             <span>{buildMessage}</span>
           </div>
         )}
-        {albumHash && pageIdx===0 && (
+        {albumHash && pageIdx === 0 && (
           <div className="mt-2 flex items-center gap-2">
             <label className="text-sm">Title</label>
-            <input className="border border-neutral-300 rounded px-2 py-1 w-80" value={coverTitle} onChange={e=>setCoverTitle(e.target.value)} placeholder="Cover title" />
-            <button className="px-3 py-1 rounded bg-neutral-200" onClick={()=>openReplace(0)}>Choose cover photo…</button>
+            <input className="border border-neutral-300 rounded px-2 py-1 w-80" value={coverTitle} onChange={e => setCoverTitle(e.target.value)} placeholder="Cover title" />
+            <button className="px-3 py-1 rounded bg-neutral-200" onClick={() => openReplace(0)}>Choose cover photo…</button>
             {coverWebSrc ? <img src={coverWebSrc} alt="cover" className="h-10 rounded border" /> : <span className="text-xs text-neutral-500">No image</span>}
           </div>
         )}
@@ -351,39 +416,51 @@ function Root() {
               page={page}
               scale={1}
               version={pageVersion}
-              onChange={(items)=>{ if (page) { page.items = items as any; setPageVersion(v=>v+1); } }}
-              onSave={async (items)=>{
+              onChange={(items) => { if (page) { page.items = items as any; setPageVersion(v => v + 1); } }}
+              onSave={async (items: any[]) => {
                 if (!page) return;
                 await api.savePage({
-                  folder, page: page.n,
-                  items: items.map(it=>({
-                    slotIndex: it.slotIndex,
-                    crop: it.crop || 'cover',
-                    objectPosition: it.objectPosition || '50% 50%',
-                    scale: (typeof it.scale === 'number' && isFinite(it.scale) && it.scale > 0) ? it.scale : 1,
-                    rotate: (typeof (it as any).rotate === 'number' && isFinite((it as any).rotate)) ? (it as any).rotate : 0,
-                    photo: it.photo ? {
-                      path: it.photo.path, filename: it.photo.filename,
-                      width: it.photo.width ?? null, height: it.photo.height ?? null,
-                      ratio: it.photo.ratio ?? null, takenAt: it.photo.takenAt ?? null
-                    } : null,
-                    src: (it as any).webSrc || (it as any).web || it.src || null,
-                  })),
+                  folder,
+                  page: page.n,
+                  items: items.map((it: any) => {
+                    const fit = it.fit === 'contain' ? 'contain' : 'cover';
+                    const align = { x: clamp01(Number(it.align?.x ?? 0)), y: clamp01(Number(it.align?.y ?? 0)) };
+                    const offset = { x: Number(it.offset?.x) || 0, y: Number(it.offset?.y) || 0 };
+                    const zoom = isPos(it.zoom) ? Number(it.zoom) : 1;
+                    const rotation = Number.isFinite(Number(it.rotation)) ? Number(it.rotation) : 0;
+                    const objectPosition = `${Math.round(50 + align.x * 50)}% ${Math.round(50 + align.y * 50)}%`;
+
+                    return {
+                      slotIndex: it.slotIndex,
+
+                      // canonical
+                      fit, align, offset, zoom, rotation, auto: !!it.auto,
+                      ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {}),
+                      ...(it.src ? { src: it.src } : {}),
+
+                      // legacy
+                      crop: fit,
+                      objectPosition,
+                      scale: zoom,
+                      rotate: rotation,
+                    };
+                  }),
                   templateId: page.templateId || null,
                 });
                 alert('Saved page overrides');
               }}
+
             />
           </div>
-          <Sidebar page={page} onSwap={swapItems} onReplace={openReplace} onTemplateChange={async (tpl)=>{
+          <Sidebar page={page} onSwap={swapItems} onReplace={openReplace} onTemplateChange={async (tpl) => {
             if (!page) return;
-            if (pageIdx===0) return; // no template selection for cover
+            if (pageIdx === 0) return; // no template selection for cover
             page.templateId = tpl;
             await api.overrideTemplate({ folder, page: page.n, templateId: tpl });
-            alert('Template set to '+tpl);
+            alert('Template set to ' + tpl);
           }} />
         </div>
-  <ReplaceDrawer open={drawerOpen} onClose={()=>setDrawerOpen(false)} loading={candLoading} candidates={candidates} onPick={(c, o)=>applyReplacement(c, o)} />
+        <ReplaceDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} loading={candLoading} candidates={candidates} onPick={(c, o) => applyReplacement(c, o)} />
       </main>
     </div>
   );
