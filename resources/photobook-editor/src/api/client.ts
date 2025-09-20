@@ -6,7 +6,7 @@ Tiny fetch wrapper for:
 - POST /photobook/save-page
 Return JSON, throw on !ok. No external libs.
 */
-import type { PagesFile, OverridePayload, SavePagePayload } from './types';
+import type { PagesFile, OverridePayload, SavePagePayload, LayoutTemplateGroups } from './types';
 
 function csrfToken(): string | undefined {
   const m = document.querySelector('meta[name="csrf-token"]') as HTMLMetaElement | null;
@@ -37,34 +37,54 @@ async function okJson<T>(res: Response): Promise<T> {
 
 export const api = {
   async getPages(folder?: string): Promise<PagesFile | null> {
-  const resp = await fetch('/photobook/pages?folder=' + encodeURIComponent(folder || ''), { headers: commonHeaders(), credentials: 'same-origin' });
-  if (resp.status === 404) return null;
-  const raw = await okJson<any>(resp);
-  // Accept both { ok, data } and raw PagesFile
-  if (raw && typeof raw === 'object' && 'ok' in raw && 'data' in raw) return (raw.data as PagesFile) ?? null;
-  return raw as PagesFile;
+  const resp = await fetch('/photobook/pages?folder=' + encodeURIComponent(folder || ''), {
+      headers: commonHeaders(),
+      credentials: 'same-origin',
+    });
+    if (resp.status === 404) return null;
+    const raw = await okJson<any>(resp);
+    // Accept both { ok, data } and raw PagesFile
+    if (raw && typeof raw === 'object' && 'ok' in raw && 'data' in raw) {
+      return (raw.data as PagesFile) ?? null;
+    }
+    return raw as PagesFile;
   },
   async getAlbums(): Promise<{ ok: boolean; albums: { hash: string; folder: string; count: number; created_at: string }[] }> {
     return okJson(await fetch('/photobook/albums', { headers: { Accept: 'application/json' } }));
   },
-  async getCandidates(folder: string, page: number): Promise<{ ok: boolean; candidates: { path: string; filename: string; src?: string | null }[] }> {
-    const u = '/photobook/candidates?folder=' + encodeURIComponent(folder) + '&page=' + encodeURIComponent(String(page));
-  return okJson(await fetch(u, { headers: commonHeaders(), credentials: 'same-origin' }));
+ async getTemplates(): Promise<LayoutTemplateGroups> {
+    return okJson(
+      await fetch('/photobook/templates', {
+        headers: commonHeaders(),
+        credentials: 'same-origin',
+      }),
+    );
+  },
+  async getCandidates(
+    folder: string,
+    page: number,
+  ): Promise<{ ok: boolean; candidates: { path: string; filename: string; src?: string | null }[] }> {
+        const u = '/photobook/candidates?folder=' + encodeURIComponent(folder) + '&page=' + encodeURIComponent(String(page));
+        return okJson(await fetch(u, { headers: commonHeaders(), credentials: 'same-origin' }));
   },
   async overrideTemplate(payload: OverridePayload) {
-    return okJson<{ok: boolean}>(await fetch('/photobook/override', {
-      method: 'POST',
-      headers: { ...commonHeaders(), 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify(payload)
-    }));
+    return okJson<{ ok: boolean }>(
+      await fetch('/photobook/override', {
+        method: 'POST',
+        headers: { ...commonHeaders(), 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload),
+      }),
+    );
   },
   async savePage(payload: SavePagePayload) {
-    return okJson<{ok: boolean}>(await fetch('/photobook/save-page', {
-      method: 'POST',
-      headers: { ...commonHeaders(), 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify(payload)
-    }));
+    return okJson<{ ok: boolean }>(
+      await fetch('/photobook/save-page', {
+        method: 'POST',
+        headers: { ...commonHeaders(), 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload),
+      }),
+    );
   },
 };

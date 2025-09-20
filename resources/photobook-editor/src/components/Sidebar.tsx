@@ -4,10 +4,24 @@ Simple sidebar with page info, swap item up/down, replace stub, and quick templa
 */
 import React from 'react';
 import { useSelection } from '../state/selection';
+import { useTemplates } from '../hooks/useTemplates';
+import type { LayoutTemplate } from '../api/types';
 type Props = { page: any; onSwap: (a:number,b:number)=>void; onReplace:(i:number)=>void; onTemplateChange:(id:string)=>void };
 
 export default function Sidebar({ page, onSwap, onReplace, onTemplateChange }: Props) {
   const { setSelected } = useSelection();
+   const templatesQ = useTemplates();
+  const templateGroups = React.useMemo(() => {
+    const entries = Object.entries(templatesQ.data ?? {}) as [string, LayoutTemplate[]][];
+    const all = entries
+      .map(([count, templates]) => ({ count: Number(count), templates }))
+      .sort((a, b) => a.count - b.count);
+    const wanted = Number.isFinite(Number(page?.items?.length)) ? Number(page.items.length) : null;
+    if (!wanted) return all;
+    // Only show the group matching the current number of items for this page
+    return all.filter(g => g.count === wanted);
+  }, [templatesQ.data, page?.items?.length]);
+  const currentTemplateId = page.templateId || page.template || '';
   return (
     <aside className="w-72 p-3 bg-white border-l border-neutral-200 flex flex-col gap-3">
       <div>
@@ -16,9 +30,34 @@ export default function Sidebar({ page, onSwap, onReplace, onTemplateChange }: P
         <div className="text-xs text-neutral-500 truncate">Template: {page.templateId || page.template || 'generic'}</div>
       </div>
 
-      <div className="flex gap-2">
-        <button className="px-3 py-1 rounded bg-neutral-800 text-white text-sm" onClick={()=>onTemplateChange('4/quad')}>4/quad</button>
-        <button className="px-3 py-1 rounded bg-neutral-200 text-sm" onClick={()=>onTemplateChange('4/hero-row')}>4/hero-row</button>
+      <div>
+        <div className="text-sm font-medium">Templates for {page.items?.length || 0} photo{(page.items?.length||0) === 1 ? '' : 's'}</div>
+        {templatesQ.isLoading && <div className="text-xs text-neutral-500 mt-1">Loading templates…</div>}
+        {templatesQ.isError && <div className="text-xs text-red-500 mt-1">Unable to load templates.</div>}
+        {!templatesQ.isLoading && !templatesQ.isError && templateGroups.length === 0 && (
+          <div className="text-xs text-neutral-500 mt-1">No templates found.</div>
+        )}
+        <div className="mt-2 flex flex-col gap-3 max-h-48 overflow-auto pr-1">
+          {templateGroups.map(group => (
+            <div key={group.count}>
+              <div className="text-[11px] uppercase tracking-wide text-neutral-500">{group.count} photo{group.count === 1 ? '' : 's'}</div>
+              <div className="mt-1 flex flex-wrap gap-2">
+                {group.templates.map((tpl) => {
+                  const active = tpl.id === currentTemplateId;
+                  return (
+                    <button
+                      key={tpl.id}
+                      className={`px-3 py-1 rounded text-sm border transition-colors ${active ? 'bg-neutral-800 text-white border-neutral-800' : 'bg-neutral-100 text-neutral-800 border-neutral-200 hover:bg-neutral-200'}`}
+                      onClick={() => onTemplateChange(tpl.id)}
+                    >
+                      {tpl.id}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div>

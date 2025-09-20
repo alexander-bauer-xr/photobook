@@ -15,6 +15,7 @@ import EditorCanvas from './components/EditorCanvas';
 import Sidebar from './components/Sidebar';
 import ReplaceDrawer from './components/ReplaceDrawer';
 import { api } from './api/client';
+import { useTemplates } from './hooks/useTemplates';
 import { PB } from './lib/api';
 // Using dynamic page typing to allow merged overrides shape
 
@@ -42,6 +43,7 @@ function Root() {
   const [buildProgress, setBuildProgress] = useState(0);
   const [buildMessage, setBuildMessage] = useState('');
   const progressTimer = useRef<number | null>(null);
+  const templatesQ = useTemplates();
   useEffect(() => { api.getAlbums().then(r => setAlbums(r?.albums || [])).catch(() => { }); }, []);
   useEffect(() => {
     if (albums.length === 0) return;
@@ -319,41 +321,24 @@ function Root() {
                 alert('Select a folder to build');
                 return;
               }
+              const hasAlbumHash = !!(albumHash && /^[a-f0-9]{40}$/i.test(albumHash));
               try {
                 // Persist cover via REST if available and albumHash exists
-                if (albumHash && /^[a-f0-9]{40}$/i.test(albumHash)) {
+
+                if (hasAlbumHash) {
                   try { await PB.setCover(albumHash, { title: coverTitle || '', image: coverPath || null }); } catch { }
                 }
 
-                // Use the existing build endpoint that already works
                 setIsBuilding(true); setBuildProgress(0); setBuildMessage('Starting build...');
 
-                const formData = new FormData();
-                formData.append('folder', folder);
-                if (coverTitle) formData.append('title', coverTitle);
-                if (coverPath) formData.append('cover_image', coverPath);
+                if (hasAlbumHash) {
+                  const payload: Record<string, string> = { folder };
+                  if (coverTitle) payload.title = coverTitle;
+                  if (coverPath) payload.cover_image = coverPath;
 
-                // Add CSRF token
-                const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
-                if (csrfToken) formData.append('_token', csrfToken);
+                  await PB.build(albumHash, payload);
 
-                const buildResponse = await fetch('/photobook/build', {
-                  method: 'POST',
-                  body: formData,
-                  headers: {
-                    'X-Requested-With': 'XMLHttpRequest',
-                  },
-                  credentials: 'same-origin'
-                });
-
-                if (!buildResponse.ok) {
-                  throw new Error('Build request failed');
-                }
-
-                setBuildMessage('Build started successfully');
-
-                // If we have albumHash, poll for progress
-                if (albumHash && /^[a-f0-9]{40}$/i.test(albumHash)) {
+                  setBuildMessage('Build started successfully');
                   if (progressTimer.current) { window.clearInterval(progressTimer.current); progressTimer.current = null; }
                   progressTimer.current = window.setInterval(async () => {
                     try {
@@ -377,7 +362,30 @@ function Root() {
                     }
                   }, 1000);
                 } else {
-                  // No progress tracking for legacy folders, just show success after delay
+                  const formData = new FormData();
+                  formData.append('folder', folder);
+                  if (coverTitle) formData.append('title', coverTitle);
+                  if (coverPath) formData.append('cover_image', coverPath);
+
+                  // Add CSRF token
+                  const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+                  if (csrfToken) formData.append('_token', csrfToken);
+
+                  const buildResponse = await fetch('/photobook/build', {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                      'X-Requested-With': 'XMLHttpRequest',
+                    },
+                    credentials: 'same-origin'
+                  });
+
+                  if (!buildResponse.ok) {
+                    throw new Error('Build request failed');
+                  }
+
+                  setBuildMessage('Build started successfully');
+
                   setTimeout(() => {
                     setIsBuilding(false);
                     setBuildMessage('Build started - check logs');
@@ -386,6 +394,7 @@ function Root() {
                 }
 
               } catch (e) {
+                if (progressTimer.current) { window.clearInterval(progressTimer.current); progressTimer.current = null; }
                 setIsBuilding(false);
                 setBuildMessage('Build failed to start');
                 setTimeout(() => setBuildMessage(''), 2000);
@@ -455,7 +464,25 @@ function Root() {
           <Sidebar page={page} onSwap={swapItems} onReplace={openReplace} onTemplateChange={async (tpl) => {
             if (!page) return;
             if (pageIdx === 0) return; // no template selection for cover
-            page.templateId = tpl;
+            // Apply slots from selected template immediately in UI
+            try {
+              const groups = templatesQ.data || {} as any;
+              const count = Array.isArray(page.items) ? page.items.length : 0;
+              const arr = (groups[String(count)] || groups[count] || []) as any[];
+              const match = arr.find((t:any) => t.id === tpl);
+              if (match && Array.isArray(match.slots)) {
+                page.templateId = tpl;
+                // Replace slots with the chosen template's geometry
+                page.slots = match.slots.map((s:any)=>({ x: s.x, y: s.y, w: s.w, h: s.h, ...(s.ar?{ ar: s.ar }: {}) }));
+                // Reassign items' slotIndex to sequential indices matching new slots
+                page.items = (page.items || []).map((it:any, i:number) => ({ ...it, slotIndex: i }));
+                setPageVersion(v => v + 1);
+              } else {
+                // Fallback: still set templateId so backend override persists
+                page.templateId = tpl;
+                setPageVersion(v => v + 1);
+              }
+            } catch {}
             await api.overrideTemplate({ folder, page: page.n, templateId: tpl });
             alert('Template set to ' + tpl);
           }} />

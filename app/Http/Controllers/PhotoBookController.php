@@ -73,14 +73,15 @@ class PhotoBookController extends Controller
             foreach ($pages as &$p) {
                 $p['hash'] = $hash;
                 foreach (($p['items'] ?? []) as &$it) {
-                    // 1) If builder provided web, use it
+                        // 1) Prefer relative cache path mapping (stable across hosts)
                     if (!empty($it['web'])) {
                         $it['webSrc'] = $it['web'];
                         continue;
                     }
-                    // 2) If we have a relative path, build via route
+                        // 2) If builder provided web, use it (may be absolute or relative)
                     if (!empty($it['rel'])) {
-                        $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']]);
+                        // Use relative URL to avoid host issues in various environments
+                        $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']], false);
                         continue;
                     }
                     // 3) Derive from file:/// src
@@ -93,7 +94,7 @@ class PhotoBookController extends Controller
                         $pos = strpos(str_replace('\\', '/', $s), $needle);
                         if ($pos !== false) {
                             $rel = substr(str_replace('\\', '/', $s), $pos + strlen($needle));
-                            $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')]);
+                                $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')], false);
                         }
                     }
                 }
@@ -108,19 +109,19 @@ class PhotoBookController extends Controller
             if (is_file($ovFile)) {
                 $lines = @file($ovFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
                 $overridesByPage = [];
-                foreach ($lines as $ln) {
+                foreach ($pages as &$p) {
                     $j = json_decode($ln, true);
                     if (!is_array($j))
-                        continue;
-                    if (!empty($j['folder']) && (string) $j['folder'] !== (string) $folder)
-                        continue;
-                    $pg = (int) ($j['page'] ?? 0);
-                    $tid = (string) ($j['templateId'] ?? '');
-                    if ($pg >= 1 && $tid !== '') {
-                        $overridesByPage[$pg] = $tid; // latest wins
-                    }
-                }
-                if (!empty($overridesByPage)) {
+                        // 1) Prefer relative cache path mapping (stable across hosts)
+                        if (!empty($it['rel'])) {
+                            $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']], false);
+                            continue;
+                        }
+                        // 2) If builder provided web, use it (may be absolute or relative)
+                        if (!empty($it['web'])) {
+                            $it['webSrc'] = $it['web'];
+                            continue;
+                        }
                     foreach ($pages as &$p) {
                         $n = (int) ($p['n'] ?? 0);
                         if ($n >= 1 && isset($overridesByPage[$n])) {
@@ -145,6 +146,35 @@ class PhotoBookController extends Controller
             'folder' => $folder,
             'pages' => $pages,
             'tplOptions' => $tplOptions,
+        ]);
+    }
+
+    /** Serve the most recent generated PDF (by mtime) for convenience. */
+    public function latestPdf()
+    {
+        $dir = storage_path('app/pdf-exports');
+        if (!is_dir($dir)) abort(404);
+        $files = array_values(array_filter(scandir($dir) ?: [], function ($f) use ($dir) {
+            return is_file($dir . DIRECTORY_SEPARATOR . $f) && preg_match('/^book-\\d{8}-\\d{6}\\.pdf$/', $f);
+        }));
+        if (empty($files)) abort(404, 'No PDFs found');
+        usort($files, function ($a, $b) use ($dir) {
+            return (@filemtime($dir . DIRECTORY_SEPARATOR . $b) <=> @filemtime($dir . DIRECTORY_SEPARATOR . $a));
+        });
+        $latest = $dir . DIRECTORY_SEPARATOR . $files[0];
+        return response()->download($latest, $files[0], [
+            'Content-Type' => 'application/pdf',
+        ]);
+    }
+
+    /** Serve a specific PDF by name, validating expected pattern. */
+    public function pdf(string $name)
+    {
+        if (!preg_match('/^book-\\d{8}-\\d{6}\\.pdf$/', $name)) abort(404);
+        $path = storage_path('app/pdf-exports/' . $name);
+        if (!is_file($path)) abort(404);
+        return response()->download($path, $name, [
+            'Content-Type' => 'application/pdf',
         ]);
     }
 
@@ -180,14 +210,18 @@ class PhotoBookController extends Controller
         try {
             foreach (($data['pages'] ?? []) as &$p) {
                 foreach (($p['items'] ?? []) as &$it) {
+                    if (!empty($it['rel'])) { // relative cache path preferred
+                        $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']], false);
+                        continue;
+                    }
                     if (!empty($it['web'])) { // builder provided web URL
                         $it['webSrc'] = $it['web'];
                         continue;
                     }
-                    if (!empty($it['rel'])) { // relative cache path
-                        $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']]);
-                        continue;
-                    }
+                        if (!empty($it['web'])) { // builder provided web URL
+                            $it['webSrc'] = $it['web'];
+                            continue;
+                        }
                     $src = (string) ($it['src'] ?? '');
                     if ($src !== '') {
                         $s = preg_replace('#^file:/{2,}#i', '', $src) ?? $src;
@@ -195,7 +229,7 @@ class PhotoBookController extends Controller
                         $pos = strpos(str_replace('\\', '/', $s), $needle);
                         if ($pos !== false) {
                             $rel = substr(str_replace('\\', '/', $s), $pos + strlen($needle));
-                            $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')]);
+                            $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')], false);
                         }
                     }
                 }
@@ -274,7 +308,7 @@ class PhotoBookController extends Controller
                         if (!empty($it['web'])) {
                             $web = $it['web'];
                         } elseif (!empty($it['rel'])) {
-                            $web = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']]);
+                            $web = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']], false);
                         } else {
                             $src = (string) ($it['src'] ?? '');
                             if ($src !== '') {
@@ -283,7 +317,7 @@ class PhotoBookController extends Controller
                                 $pos = strpos(str_replace('\\', '/', $s), $needle);
                                 if ($pos !== false) {
                                     $rel = substr(str_replace('\\', '/', $s), $pos + strlen($needle));
-                                    $web = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')]);
+                                    $web = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')], false);
                                 }
                             }
                         }

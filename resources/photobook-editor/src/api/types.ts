@@ -47,3 +47,6 @@ export type PagesFile = {
 
 export type OverridePayload = { folder?: string; page: number; templateId?: string };
 export type SavePagePayload = { folder?: string; page: number; items: PageItem[]; templateId?: string | null };
+
+export type LayoutTemplate = { id: string; slots: SlotRect[] };
+export type LayoutTemplateGroups = Record<number, LayoutTemplate[]>;

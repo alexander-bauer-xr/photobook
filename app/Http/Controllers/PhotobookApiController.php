@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use App\Jobs\BuildPhotoBook;
+use App\Services\LayoutTemplates;
 
 class PhotobookApiController extends Controller
 {
@@ -52,6 +53,11 @@ class PhotobookApiController extends Controller
         return response()->json($out);
     }
 
+    public function templates()
+    {
+        return response()->json(LayoutTemplates::all());
+    }
+
     public function getPages(string $hash)
     {
         $path = $this->pagesPath($hash);
@@ -64,7 +70,7 @@ class PhotobookApiController extends Controller
             foreach (($data['pages'] ?? []) as &$p) {
                 foreach (($p['items'] ?? []) as &$it) {
                     if (!empty($it['web'])) { $it['webSrc'] = $it['web']; continue; }
-                    if (!empty($it['rel'])) { $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']]); continue; }
+                    if (!empty($it['rel'])) { $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']], false); continue; }
                     $src = (string) ($it['src'] ?? '');
                     if ($src !== '') {
                         $s = preg_replace('#^file:/{2,}#i', '', $src) ?? $src;
@@ -72,7 +78,7 @@ class PhotobookApiController extends Controller
                         $pos = strpos(str_replace('\\', '/', $s), $needle);
                         if ($pos !== false) {
                             $rel = substr(str_replace('\\', '/', $s), $pos + strlen($needle));
-                            $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')]);
+                            $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')], false);
                         }
                     }
                 }
@@ -110,7 +116,7 @@ class PhotobookApiController extends Controller
                                 $pos = strpos(str_replace('\\', '/', $s), $needle);
                                 if ($pos !== false) {
                                     $rel = substr(str_replace('\\', '/', $s), $pos + strlen($needle));
-                                    $data['cover']['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')]);
+                                    $data['cover']['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')], false);
                                 }
                             }
                         }

@@ -82,6 +82,21 @@ class PhotoBookFeedbackController extends Controller
         }
         \Log::info('Photobook override saved', ['file' => $file, 'page' => $page, 'templateId' => $templateId]);
 
+        // Also reflect the change into overrides.json so UI can pick it up immediately
+        try {
+            $jsonPath = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.json';
+            $data = is_file($jsonPath) ? (json_decode(@file_get_contents($jsonPath), true) ?: ['pages' => []]) : ['pages' => []];
+            $data['pages'] = $data['pages'] ?? [];
+            $entryJson = $data['pages'][(string) $page] ?? [];
+            $entryJson['templateId'] = $templateId;
+            $entryJson['updated_at'] = date(DATE_ATOM);
+            $data['pages'][(string) $page] = $entryJson;
+            @file_put_contents($jsonPath, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        } catch (\Throwable $e) {
+            // non-fatal
+            \Log::debug('overrideTemplate: overrides.json write skipped', ['err' => $e->getMessage()]);
+        }
+
         return response()->json(['ok' => true]);
     }
 

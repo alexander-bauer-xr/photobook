@@ -13,4 +13,5 @@ Route::prefix('photobook')->group(function () {
     Route::post('/upload/{hash}', [PhotobookApiController::class, 'uploadImage']);
     Route::post('/build/{hash}', [PhotobookApiController::class, 'startBuild']);
     Route::get('/progress/{hash}', [PhotobookApiController::class, 'progress']);
+    Route::get('/templates', [PhotobookApiController::class, 'templates']);
 });

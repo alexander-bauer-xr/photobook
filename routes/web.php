@@ -9,15 +9,26 @@ Route::get('/', function () {
 
 use App\Http\Controllers\PhotoBookController;
 use App\Http\Controllers\PhotoBookFeedbackController;
+use App\Services\LayoutTemplates;
 
 Route::get('/photobook', [PhotoBookController::class, 'index']);
 Route::match(['GET','POST'], '/photobook/build', [PhotoBookController::class, 'build']);
 Route::get('/photobook/review', [PhotoBookController::class, 'review']);
 Route::get('/photobook/asset/{hash}/{path}', [PhotoBookController::class, 'asset'])->where('path', '.*')->name('photobook.asset');
+// PDF access helpers
+Route::get('/photobook/pdf/latest', [PhotoBookController::class, 'latestPdf'])->name('photobook.pdf.latest');
+Route::get('/photobook/pdf/{name}', [PhotoBookController::class, 'pdf'])
+    ->where('name', 'book-[0-9]{8}-[0-9]{6}\\.pdf')
+    ->name('photobook.pdf');
 
 // Feedback & override endpoints
 Route::post('/photobook/feedback', [PhotoBookFeedbackController::class, 'submit'])->name('photobook.feedback');
 Route::post('/photobook/override', [PhotoBookFeedbackController::class, 'overrideTemplate'])->name('photobook.override');
+
+// Templates (used by the React editor)
+Route::get('/photobook/templates', function () {
+    return response()->json(LayoutTemplates::all());
+});
 
 
 Route::get('/photobook/pages', [PhotoBookController::class, 'pagesJson']);        // GET ?folder=...
@@ -30,6 +41,29 @@ Route::get('/photobook/editor', function () {
     return view('photobook.editor');
 });
 // ======= /PHOTOBOOK_EDITOR_UI =======
+
+// Small helper to fetch the latest PDF URL as JSON (for UI polling)
+Route::get('/photobook/latest-pdf.json', function () {
+    $dir = storage_path('app/pdf-exports');
+    $out = ['ok' => false];
+    if (is_dir($dir)) {
+        $files = array_values(array_filter(scandir($dir) ?: [], function ($f) use ($dir) {
+            return is_file($dir . DIRECTORY_SEPARATOR . $f) && preg_match('/^book-\d{8}-\d{6}\.pdf$/', $f);
+        }));
+        if (!empty($files)) {
+            usort($files, function ($a, $b) use ($dir) {
+                return (@filemtime($dir . DIRECTORY_SEPARATOR . $b) <=> @filemtime($dir . DIRECTORY_SEPARATOR . $a));
+            });
+            $name = $files[0];
+            $out = [
+                'ok' => true,
+                'name' => $name,
+                'url' => route('photobook.pdf', ['name' => $name], false),
+            ];
+        }
+    }
+    return response()->json($out);
+});
 
 // ======= PHOTOBOOK_EDITOR_ROUTES (auto-added) =======
 use Illuminate\Http\Request;
@@ -107,11 +141,11 @@ Route::get('/photobook/pages', function (Request $r) {
     } catch (\Throwable $e) {
         // ignore
     }
-    // Inject webSrc for each item if missing
+    // Inject webSrc for each item if missing (use relative URL to avoid wrong host)
     foreach (($data['pages'] ?? []) as &$p) {
         foreach (($p['items'] ?? []) as &$it) {
             if (empty($it['webSrc']) && !empty($it['rel'])) {
-                $it['webSrc'] = route('photobook.asset', ['hash'=>$hash, 'path'=>$it['rel']]);
+                $it['webSrc'] = route('photobook.asset', ['hash'=>$hash, 'path'=>$it['rel']], false);
             }
         }
         unset($it);

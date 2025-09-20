@@ -311,7 +311,7 @@ class PhotoBookBuilder
                 // Also provide an HTTP URL fallback for environments where file:/// is restricted
                 try {
                     $hash = sha1($folder);
-                    $options['cover_image_web'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')]);
+                    $options['cover_image_web'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')], false);
                 } catch (\Throwable $e) {
                     // ignore route issues
                 }
@@ -510,7 +510,7 @@ class PhotoBookBuilder
                 if (str_starts_with($fileNorm, $prefixNorm)) {
                     $rel = ltrim(substr($fileNorm, strlen($prefixNorm)), '/');
                     $it['rel'] = $rel;
-                    $it['web'] = route('photobook.asset', ['hash' => $hash, 'path' => $rel]);
+                    $it['web'] = route('photobook.asset', ['hash' => $hash, 'path' => $rel], false);
                 }
 
                 // --- NEW: canonical placement defaults (match Python/UI)
@@ -778,7 +778,7 @@ class PhotoBookBuilder
                 $hash = sha1($folder);
                 $coverRel = (string) $options['cover_image'];
                 $coverSrc = (string) $options['cover_image_src'];
-                $coverWeb = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($coverRel, '/')]);
+                $coverWeb = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($coverRel, '/')], false);
                 $photoArr = null;
                 if ($coverOrigPhoto && isset($coverOrigPhoto->path)) {
                     $photoArr = [

@@ -81,6 +81,7 @@
             <label>Folder <input name="folder" value="{{ $folder }}" style="width:360px"></label>
             <button type="submit">Load</button>
             <a class="small" href="/photobook">Back</a>
+            <a class="small" href="{{ route('photobook.pdf.latest', [], false) }}" target="_blank" rel="noopener">Download latest PDF</a>
         </form>
     </header>
 
