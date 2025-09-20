@@ -134,7 +134,8 @@ type Props = {
    ========================================================= */
 
 /** Rotations-Pad-Faktor K gegen Self-Cropping */
-const getSrc = (it: AnyItem) => (it as any).web || (it as any).webSrc || it.src || '';
+// Prefer webSrc (relative) over web (which may be absolute) to avoid host mismatch
+const getSrc = (it: AnyItem) => (it as any).webSrc || (it as any).web || it.src || '';
 
 /* =========================================================
    Persist: Normalisieren, Validieren, Payload, POST

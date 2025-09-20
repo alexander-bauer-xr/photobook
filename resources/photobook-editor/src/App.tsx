@@ -423,7 +423,6 @@ function Root() {
           <div className="flex-1 flex items-center justify-center overflow-auto">
             <EditorCanvas
               page={page}
-              scale={1}
               version={pageVersion}
               onChange={(items) => { if (page) { page.items = items as any; setPageVersion(v => v + 1); } }}
               onSave={async (items: any[]) => {

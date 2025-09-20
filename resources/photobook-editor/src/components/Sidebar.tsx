@@ -63,10 +63,10 @@ export default function Sidebar({ page, onSwap, onReplace, onTemplateChange }: P
       <div>
         <div className="text-sm font-medium">Items</div>
         <ul className="mt-2 flex flex-col gap-2">
-          {page.items.map((it,i)=>(
+          {page.items.map((it: any, i: number)=>(
             <li key={i} className="flex items-center gap-2">
               <div className="w-12 h-10 bg-neutral-100 rounded overflow-hidden">
-                {(() => { const u = (it as any).web || (it as any).webSrc || it.src; return u ? <img src={u} alt="thumb" className="w-full h-full object-cover"/> : null; })()}
+                {(() => { const u = (it as any).webSrc || (it as any).web || it.src; return u ? <img src={u} alt="thumb" className="w-full h-full object-cover"/> : null; })()}
               </div>
               <div className="text-xs flex-1">
                 <div>slot {it.slotIndex}</div>

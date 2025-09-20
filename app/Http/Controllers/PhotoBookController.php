@@ -73,15 +73,15 @@ class PhotoBookController extends Controller
             foreach ($pages as &$p) {
                 $p['hash'] = $hash;
                 foreach (($p['items'] ?? []) as &$it) {
-                        // 1) Prefer relative cache path mapping (stable across hosts)
-                    if (!empty($it['web'])) {
-                        $it['webSrc'] = $it['web'];
-                        continue;
-                    }
-                        // 2) If builder provided web, use it (may be absolute or relative)
+                    // 1) Prefer relative cache path mapping (stable across hosts)
                     if (!empty($it['rel'])) {
                         // Use relative URL to avoid host issues in various environments
                         $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']], false);
+                        continue;
+                    }
+                    // 2) If builder provided web, use it (may be absolute or relative)
+                    if (!empty($it['web'])) {
+                        $it['webSrc'] = $it['web'];
                         continue;
                     }
                     // 3) Derive from file:/// src
@@ -103,33 +103,21 @@ class PhotoBookController extends Controller
             unset($p);
         }
 
-        // Overlay any pending template overrides so the UI reflects user's latest choices
+        // Overlay templateId from overrides.json so the UI reflects user's latest choices
         try {
-            $ovFile = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.log';
-            if (is_file($ovFile)) {
-                $lines = @file($ovFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
-                $overridesByPage = [];
+            $ovJson = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.json';
+            if (is_file($ovJson)) {
+                $ov = json_decode((string) @file_get_contents($ovJson), true) ?: [];
+                $pagesOv = is_array($ov['pages'] ?? null) ? $ov['pages'] : [];
                 foreach ($pages as &$p) {
-                    $j = json_decode($ln, true);
-                    if (!is_array($j))
-                        // 1) Prefer relative cache path mapping (stable across hosts)
-                        if (!empty($it['rel'])) {
-                            $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']], false);
-                            continue;
-                        }
-                        // 2) If builder provided web, use it (may be absolute or relative)
-                        if (!empty($it['web'])) {
-                            $it['webSrc'] = $it['web'];
-                            continue;
-                        }
-                    foreach ($pages as &$p) {
-                        $n = (int) ($p['n'] ?? 0);
-                        if ($n >= 1 && isset($overridesByPage[$n])) {
-                            $p['overrideTemplateId'] = $overridesByPage[$n];
-                        }
+                    $n = (int) ($p['n'] ?? 0);
+                    if ($n < 1) continue;
+                    $po = $pagesOv[(string) $n] ?? null;
+                    if (is_array($po) && !empty($po['templateId'])) {
+                        $p['overrideTemplateId'] = (string) $po['templateId'];
                     }
-                    unset($p);
                 }
+                unset($p);
             }
         } catch (\Throwable $e) {
             // ignore
@@ -215,13 +203,15 @@ class PhotoBookController extends Controller
                         continue;
                     }
                     if (!empty($it['web'])) { // builder provided web URL
-                        $it['webSrc'] = $it['web'];
+                            $w = (string) $it['web'];
+                            if (preg_match('#/photobook/asset/' . preg_quote($hash, '#') . '/(.+)$#', $w, $m)) {
+                                $rel = $m[1];
+                                $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')], false);
+                            } else {
+                                $it['webSrc'] = $w;
+                            }
                         continue;
                     }
-                        if (!empty($it['web'])) { // builder provided web URL
-                            $it['webSrc'] = $it['web'];
-                            continue;
-                        }
                     $src = (string) ($it['src'] ?? '');
                     if ($src !== '') {
                         $s = preg_replace('#^file:/{2,}#i', '', $src) ?? $src;
@@ -305,10 +295,16 @@ class PhotoBookController extends Controller
                     if (is_array($ph) && !empty($ph['path'])) {
                         // Build a web-friendly URL
                         $web = null;
-                        if (!empty($it['web'])) {
-                            $web = $it['web'];
-                        } elseif (!empty($it['rel'])) {
+                        if (!empty($it['rel'])) {
                             $web = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']], false);
+                        } elseif (!empty($it['web'])) {
+                            $w = (string) $it['web'];
+                            if (preg_match('#/photobook/asset/' . preg_quote($hash, '#') . '/(.+)$#', $w, $m)) {
+                                $rel = $m[1];
+                                $web = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')], false);
+                            } else {
+                                $web = $w;
+                            }
                         } else {
                             $src = (string) ($it['src'] ?? '');
                             if ($src !== '') {

@@ -65,12 +65,21 @@ class PhotobookApiController extends Controller
         $json = @file_get_contents($path) ?: '';
         $data = json_decode($json, true) ?: [];
 
-        // Inject webSrc like legacy endpoint
+        // Inject webSrc like legacy endpoint (prefer relative asset URLs)
         try {
             foreach (($data['pages'] ?? []) as &$p) {
                 foreach (($p['items'] ?? []) as &$it) {
-                    if (!empty($it['web'])) { $it['webSrc'] = $it['web']; continue; }
                     if (!empty($it['rel'])) { $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']], false); continue; }
+                    if (!empty($it['web'])) {
+                        $w = (string) $it['web'];
+                        if (preg_match('#/photobook/asset/' . preg_quote($hash, '#') . '/(.+)$#', $w, $m)) {
+                            $rel = $m[1];
+                            $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')], false);
+                        } else {
+                            $it['webSrc'] = $w;
+                        }
+                        continue;
+                    }
                     $src = (string) ($it['src'] ?? '');
                     if ($src !== '') {
                         $s = preg_replace('#^file:/{2,}#i', '', $src) ?? $src;
@@ -87,7 +96,7 @@ class PhotobookApiController extends Controller
             unset($p);
         } catch (\Throwable $e) {}
 
-        // Merge overrides.json so UI sees latest changes
+    // Merge overrides.json so UI sees latest changes
         try {
             $ovPath = $this->albumDir($hash) . DIRECTORY_SEPARATOR . 'overrides.json';
             $overrides = is_file($ovPath) ? (json_decode(@file_get_contents($ovPath), true) ?: ['pages'=>[]]) : ['pages'=>[]];
@@ -145,6 +154,43 @@ class PhotobookApiController extends Controller
                     }
                 }
                 unset($p);
+
+                // Re-normalize webSrc after overrides have been applied
+                foreach (($data['pages'] ?? []) as &$pp) {
+                    foreach (($pp['items'] ?? []) as &$it) {
+                        if (!empty($it['rel'])) {
+                            $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']], false);
+                            continue;
+                        }
+                        if (!empty($it['web'])) {
+                            $w = (string) $it['web'];
+                            if (preg_match('#/photobook/asset/' . preg_quote($hash, '#') . '/(.+)$#', $w, $m)) {
+                                $rel = $m[1];
+                                $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')], false);
+                                continue;
+                            }
+                        }
+                        if (!empty($it['src'])) {
+                            $s = (string) $it['src'];
+                            // If override stored an absolute asset URL, normalize to relative
+                            if (preg_match('#/photobook/asset/' . preg_quote($hash, '#') . '/(.+)$#', $s, $m)) {
+                                $rel = $m[1];
+                                $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')], false);
+                                continue;
+                            }
+                            // Else derive from file:// path
+                            $s2 = preg_replace('#^file:/{2,}#i', '', $s) ?? $s;
+                            $needle = '/_cache/' . $hash . '/';
+                            $pos = strpos(str_replace('\\', '/', $s2), $needle);
+                            if ($pos !== false) {
+                                $rel = substr(str_replace('\\', '/', $s2), $pos + strlen($needle));
+                                $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')], false);
+                            }
+                        }
+                    }
+                    unset($it);
+                }
+                unset($pp);
             }
         } catch (\Throwable $e) {}
 

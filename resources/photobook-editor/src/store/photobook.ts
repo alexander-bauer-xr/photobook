@@ -51,7 +51,7 @@ export const usePB = create<PBState>((set, get) => ({
       items: (p.items || []).map((it: any) => ({
         slotIndex: it.slotIndex ?? 0,
         photo: it.photo,
-    src: it.web ?? it.webSrc ?? it.src ?? null,
+  src: it.webSrc ?? it.web ?? it.src ?? null,
     // Prefer canonical when present, else legacy
     objectPosition: it.objectPosition ?? (typeof it.align === 'object' && it.align
       ? `${Math.round(50 + Math.max(-1, Math.min(1, Number(it.align.x ?? 0))) * 50)}% ${Math.round(50 + Math.max(-1, Math.min(1, Number(it.align.y ?? 0))) * 50)}%`

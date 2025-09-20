@@ -5,7 +5,7 @@ Keep them strict. Add optional "scale?: number" on PageItem for zoom.
 */
 export type Photo = {
   path: string;
-  filename: string;
+  filename?: string;
   width?: number | null;
   height?: number | null;
   ratio?: number | null;

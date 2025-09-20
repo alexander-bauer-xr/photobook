@@ -36,8 +36,9 @@ export type SlotSnapshot = {
   innerPad: number;
 };
 
+// Prefer webSrc (relative) over any absolute web URL to avoid host mismatches
 const getSrc = (it: Item) =>
-  (it as any).web || (it as any).webSrc || it.src || '';
+  (it as any).webSrc || (it as any).web || it.src || '';
 
 export default function SlotView({
   pageNumber,
