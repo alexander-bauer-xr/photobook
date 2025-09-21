@@ -25,6 +25,49 @@ class PhotobookApiController extends Controller
         return $this->albumDir($hash) . DIRECTORY_SEPARATOR . 'pages.json';
     }
 
+    private function normalizeAssetUrl(string $hash, $value): ?string
+    {
+        if (!is_string($value) || $value === '') {
+            return null;
+        }
+
+        $candidate = preg_replace('#^file:/{2,}#i', '', $value) ?? $value;
+        $candidate = str_replace('\\\\', '/', $candidate);
+
+        $paths = [$candidate];
+        $parsedPath = @parse_url($candidate, PHP_URL_PATH);
+        if (is_string($parsedPath) && $parsedPath !== '' && $parsedPath !== $candidate) {
+            $paths[] = $parsedPath;
+        }
+
+        foreach ($paths as $path) {
+            if (!is_string($path) || $path === '') {
+                continue;
+            }
+
+            $trimmed = preg_split('/[?#]/', $path, 2)[0] ?? $path;
+            $withLeadingSlash = $trimmed !== '' && $trimmed[0] !== '/' ? '/' . $trimmed : $trimmed;
+
+            if ($withLeadingSlash !== '' && preg_match('#/photobook/asset/' . preg_quote($hash, '#') . '/(.+)$#', $withLeadingSlash, $m)) {
+                $rel = ltrim($m[1], '/');
+                if ($rel !== '') {
+                    return route('photobook.asset', ['hash' => $hash, 'path' => $rel], false);
+                }
+            }
+
+            $needle = '/_cache/' . $hash . '/';
+            $pos = strpos($trimmed, $needle);
+            if ($pos !== false) {
+                $rel = ltrim(substr($trimmed, $pos + strlen($needle)), '/');
+                if ($rel !== '') {
+                    return route('photobook.asset', ['hash' => $hash, 'path' => $rel], false);
+                }
+            }
+        }
+
+        return null;
+    }
+
     private function writeJsonAtomic(string $path, array $data): void
     {
         $tmp = $path . '.tmp';
@@ -38,9 +81,11 @@ class PhotobookApiController extends Controller
         $out = [];
         if (is_dir($root)) {
             foreach (scandir($root) ?: [] as $d) {
-                if ($d === '.' || $d === '..') continue;
+                if ($d === '.' || $d === '..')
+                    continue;
                 $pages = $root . DIRECTORY_SEPARATOR . $d . DIRECTORY_SEPARATOR . 'pages.json';
-                if (!is_file($pages)) continue;
+                if (!is_file($pages))
+                    continue;
                 $data = json_decode((string) @file_get_contents($pages), true) ?: [];
                 $out[] = [
                     'hash' => $d,
@@ -61,7 +106,8 @@ class PhotobookApiController extends Controller
     public function getPages(string $hash)
     {
         $path = $this->pagesPath($hash);
-        if (!is_file($path)) return response()->json(['ok' => false, 'error' => 'pages.json missing'], 404);
+        if (!is_file($path))
+            return response()->json(['ok' => false, 'error' => 'pages.json missing'], 404);
         $json = @file_get_contents($path) ?: '';
         $data = json_decode($json, true) ?: [];
 
@@ -69,37 +115,30 @@ class PhotobookApiController extends Controller
         try {
             foreach (($data['pages'] ?? []) as &$p) {
                 foreach (($p['items'] ?? []) as &$it) {
-                    if (!empty($it['rel'])) { $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']], false); continue; }
-                    if (!empty($it['web'])) {
-                        $w = (string) $it['web'];
-                        if (preg_match('#/photobook/asset/' . preg_quote($hash, '#') . '/(.+)$#', $w, $m)) {
-                            $rel = $m[1];
-                            $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')], false);
-                        } else {
-                            $it['webSrc'] = $w;
-                        }
+                    if (!empty($it['rel'])) {
+                        $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']], false);
                         continue;
                     }
-                    $src = (string) ($it['src'] ?? '');
-                    if ($src !== '') {
-                        $s = preg_replace('#^file:/{2,}#i', '', $src) ?? $src;
-                        $needle = '/_cache/' . $hash . '/';
-                        $pos = strpos(str_replace('\\', '/', $s), $needle);
-                        if ($pos !== false) {
-                            $rel = substr(str_replace('\\', '/', $s), $pos + strlen($needle));
-                            $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')], false);
-                        }
+                    if (!empty($it['web'])) {
+                        $normalized = $this->normalizeAssetUrl($hash, $it['web']);
+                        $it['webSrc'] = $normalized ?? (string) $it['web'];
+                        continue;
+                    }
+                    $normalizedSrc = $this->normalizeAssetUrl($hash, $it['src'] ?? null);
+                    if ($normalizedSrc) {
+                        $it['webSrc'] = $normalizedSrc;
                     }
                 }
                 unset($it);
             }
             unset($p);
-        } catch (\Throwable $e) {}
+        } catch (\Throwable $e) {
+        }
 
-    // Merge overrides.json so UI sees latest changes
+        // Merge overrides.json so UI sees latest changes
         try {
             $ovPath = $this->albumDir($hash) . DIRECTORY_SEPARATOR . 'overrides.json';
-            $overrides = is_file($ovPath) ? (json_decode(@file_get_contents($ovPath), true) ?: ['pages'=>[]]) : ['pages'=>[]];
+            $overrides = is_file($ovPath) ? (json_decode(@file_get_contents($ovPath), true) ?: ['pages' => []]) : ['pages' => []];
             if (is_array($overrides['pages'] ?? null)) {
                 // Check for cover override (page "1" with templateId "cover")
                 $coverOv = $overrides['pages']['1'] ?? null;
@@ -119,34 +158,37 @@ class PhotobookApiController extends Controller
                             }
                             // Add webSrc for cover if we have a path
                             if (!empty($data['cover']['image'])) {
-                                $src = $data['cover']['image'];
-                                $s = preg_replace('#^file:/{2,}#i', '', $src) ?? $src;
-                                $needle = '/_cache/' . $hash . '/';
-                                $pos = strpos(str_replace('\\', '/', $s), $needle);
-                                if ($pos !== false) {
-                                    $rel = substr(str_replace('\\', '/', $s), $pos + strlen($needle));
-                                    $data['cover']['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')], false);
+                                $coverWeb = $this->normalizeAssetUrl($hash, $data['cover']['image']);
+                                if ($coverWeb) {
+                                    $data['cover']['webSrc'] = $coverWeb;
                                 }
                             }
                         }
                     }
                 }
-                
+
                 foreach ($data['pages'] as $idx => &$p) {
                     $pageNo = ($p['n'] ?? ($idx + 1));
                     $ov = $overrides['pages'][(string) $pageNo] ?? null;
                     if (is_array($ov)) {
-                        if (!empty($ov['templateId'])) $p['templateId'] = (string) $ov['templateId'];
+                        if (!empty($ov['templateId']))
+                            $p['templateId'] = (string) $ov['templateId'];
                         if (is_array($ov['items'] ?? null) && !empty($ov['items'])) {
                             $bySlot = [];
-                            foreach ($ov['items'] as $it) { $bySlot[(int) ($it['slotIndex'] ?? 0)] = $it; }
+                            foreach ($ov['items'] as $it) {
+                                $bySlot[(int) ($it['slotIndex'] ?? 0)] = $it;
+                            }
                             foreach ($p['items'] as &$it) {
                                 $si = (int) ($it['slotIndex'] ?? 0);
                                 if (isset($bySlot[$si])) {
                                     $ovI = $bySlot[$si];
-                                    foreach (['crop','objectPosition','scale','rotate'] as $k) if (isset($ovI[$k])) $it[$k] = $ovI[$k];
-                                    if (!empty($ovI['photo'])) $it['photo'] = $ovI['photo'];
-                                    if (!empty($ovI['src'])) $it['src'] = $ovI['src'];
+                                    foreach (['crop', 'objectPosition', 'scale', 'rotate'] as $k)
+                                        if (isset($ovI[$k]))
+                                            $it[$k] = $ovI[$k];
+                                    if (!empty($ovI['photo']))
+                                        $it['photo'] = $ovI['photo'];
+                                    if (!empty($ovI['src']))
+                                        $it['src'] = $ovI['src'];
                                 }
                             }
                             unset($it);
@@ -163,45 +205,35 @@ class PhotobookApiController extends Controller
                             continue;
                         }
                         if (!empty($it['web'])) {
-                            $w = (string) $it['web'];
-                            if (preg_match('#/photobook/asset/' . preg_quote($hash, '#') . '/(.+)$#', $w, $m)) {
-                                $rel = $m[1];
-                                $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')], false);
+                            $normalized = $this->normalizeAssetUrl($hash, $it['web']);
+                            if ($normalized) {
+                                $it['webSrc'] = $normalized;
                                 continue;
                             }
+                            $it['webSrc'] = (string) $it['web'];
+                            continue;
                         }
-                        if (!empty($it['src'])) {
-                            $s = (string) $it['src'];
-                            // If override stored an absolute asset URL, normalize to relative
-                            if (preg_match('#/photobook/asset/' . preg_quote($hash, '#') . '/(.+)$#', $s, $m)) {
-                                $rel = $m[1];
-                                $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')], false);
-                                continue;
-                            }
-                            // Else derive from file:// path
-                            $s2 = preg_replace('#^file:/{2,}#i', '', $s) ?? $s;
-                            $needle = '/_cache/' . $hash . '/';
-                            $pos = strpos(str_replace('\\', '/', $s2), $needle);
-                            if ($pos !== false) {
-                                $rel = substr(str_replace('\\', '/', $s2), $pos + strlen($needle));
-                                $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => ltrim($rel, '/')], false);
-                            }
+                        $normalizedSrc = $this->normalizeAssetUrl($hash, $it['src'] ?? null);
+                        if ($normalizedSrc) {
+                            $it['webSrc'] = $normalizedSrc;
                         }
                     }
                     unset($it);
                 }
                 unset($pp);
             }
-        } catch (\Throwable $e) {}
+        } catch (\Throwable $e) {
+        }
 
-    return response()->json($data);
+        return response()->json($data);
     }
 
     // Accept either JSON-Patch array or partial object (merged recursively)
     public function patchPages(Request $req, string $hash)
     {
         $path = $this->pagesPath($hash);
-        if (!is_file($path)) return response()->json(['error' => 'pages.json not found'], 404);
+        if (!is_file($path))
+            return response()->json(['error' => 'pages.json not found'], 404);
 
         $lock = Cache::lock("pb:pages:$hash", 10);
         return $lock->block(10, function () use ($req, $path) {
@@ -229,7 +261,8 @@ class PhotobookApiController extends Controller
             'items' => 'array',
         ]);
         $path = $this->pagesPath($hash);
-        if (!is_file($path)) return response()->json(['error' => 'pages.json not found'], 404);
+        if (!is_file($path))
+            return response()->json(['error' => 'pages.json not found'], 404);
 
         $lock = Cache::lock("pb:pages:$hash", 10);
         return $lock->block(10, function () use ($path, $data) {
@@ -251,7 +284,8 @@ class PhotobookApiController extends Controller
     public function deletePage(string $hash, string $pageId)
     {
         $path = $this->pagesPath($hash);
-        if (!is_file($path)) return response()->json(['error' => 'pages.json not found'], 404);
+        if (!is_file($path))
+            return response()->json(['error' => 'pages.json not found'], 404);
 
         $lock = Cache::lock("pb:pages:$hash", 10);
         return $lock->block(10, function () use ($path, $pageId) {
@@ -271,7 +305,8 @@ class PhotobookApiController extends Controller
             'title' => 'nullable|string',
         ]);
         $path = $this->pagesPath($hash);
-        if (!is_file($path)) return response()->json(['error' => 'pages.json not found'], 404);
+        if (!is_file($path))
+            return response()->json(['error' => 'pages.json not found'], 404);
 
         $lock = Cache::lock("pb:pages:$hash", 10);
         return $lock->block(10, function () use ($path, $data) {
@@ -311,7 +346,8 @@ class PhotobookApiController extends Controller
         // Fallback: accept folder from request (first build or no pages.json yet)
         if (!$folder) {
             $folder = (string) $req->input('folder', '');
-            if ($folder === '') $folder = null;
+            if ($folder === '')
+                $folder = null;
         }
 
         $options = [
@@ -354,7 +390,8 @@ class PhotobookApiController extends Controller
         $ref = &$doc;
         for ($i = 0; $i < max(0, count($parts) - 1); $i++) {
             $k = ctype_digit($parts[$i]) ? (int) $parts[$i] : $parts[$i];
-            if (!isset($ref[$k])) $ref[$k] = [];
+            if (!isset($ref[$k]))
+                $ref[$k] = [];
             $ref = &$ref[$k];
         }
         $last = end($parts);
@@ -366,7 +403,8 @@ class PhotobookApiController extends Controller
                 $ref[$key] = $op['value'] ?? null;
                 break;
             case 'remove':
-                if (is_array($ref) && array_key_exists($key, $ref)) unset($ref[$key]);
+                if (is_array($ref) && array_key_exists($key, $ref))
+                    unset($ref[$key]);
                 break;
         }
         return $doc;
