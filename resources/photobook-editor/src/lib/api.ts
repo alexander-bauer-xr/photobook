@@ -11,5 +11,6 @@ export const PB = {
   deletePage: (hash: string, id: string) => api(`/api/photobook/pages/${hash}/page/${id}`, { method: 'DELETE' }),
   setCover: (hash: string, payload: any) => api(`/api/photobook/cover/${hash}`, { method: 'POST', body: JSON.stringify(payload) }),
   build: (hash: string, payload: any) => api(`/api/photobook/build/${hash}`, { method: 'POST', body: JSON.stringify(payload) }),
+  buildByFolder: (payload: any) => api(`/api/photobook/build-folder`, { method: 'POST', body: JSON.stringify(payload) }) as Promise<{ ok: boolean; status: string; hash: string }>,
   progress: (hash: string) => api(`/api/photobook/progress/${hash}`),
 };

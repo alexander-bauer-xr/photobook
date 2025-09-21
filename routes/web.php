@@ -86,6 +86,19 @@ Route::get('/photobook/pages', function (Request $r) {
         $ov = is_file($ovPath) ? (json_decode(@file_get_contents($ovPath), true) ?: []) : [];
         $ovPages = (array) ($ov['pages'] ?? []);
         if (!empty($ovPages)) {
+            // template slots index id->slots
+            $tplIndex = [];
+            try {
+                $all = \App\Services\LayoutTemplates::all();
+                foreach ($all as $cnt=>$arr) {
+                    foreach ((array)$arr as $tpl) {
+                        $id = (string) ($tpl['id'] ?? '');
+                        if ($id !== '' && !empty($tpl['slots']) && is_array($tpl['slots'])) {
+                            $tplIndex[$id] = $tpl['slots'];
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {}
             // Special-case cover: if page "1" with templateId cover exists, reflect its item[0] into top-level cover
             try {
                 $cov = $ovPages['1'] ?? null;
@@ -99,6 +112,7 @@ Route::get('/photobook/pages', function (Request $r) {
                         }
                         $data['cover']['image'] = $ci['photo']['path'];
                         foreach (['objectPosition','scale','rotate'] as $k) if (isset($ci[$k])) $data['cover'][$k] = $ci[$k];
+                        foreach (['align','offset','zoom','rotation','auto'] as $k) if (isset($ci[$k])) $data['cover'][$k] = $ci[$k];
                     }
                 }
             } catch (\Throwable $e) {}
@@ -108,6 +122,9 @@ Route::get('/photobook/pages', function (Request $r) {
                 $ovp = $ovPages[$n];
                 if (!empty($ovp['templateId'])) {
                     $p['templateId'] = (string) $ovp['templateId'];
+                    if (!empty($tplIndex[$p['templateId']])) {
+                        $p['slots'] = $tplIndex[$p['templateId']];
+                    }
                 }
                 if (isset($ovp['items']) && is_array($ovp['items']) && isset($p['items']) && is_array($p['items'])) {
                     // Merge by slotIndex; keep base photo/web/rel unless overridden, update visual fields
@@ -119,6 +136,11 @@ Route::get('/photobook/pages', function (Request $r) {
                         foreach ($baseItems as $j => $bi) {
                             if ((int) ($bi['slotIndex'] ?? -1) === $slotIdx) {
                                 foreach (['objectPosition','crop','scale','rotate','caption','x','y','width','height','src'] as $k) {
+                                    if (array_key_exists($k, $ovIt)) {
+                                        $baseItems[$j][$k] = $ovIt[$k];
+                                    }
+                                }
+                                foreach (['align','offset','zoom','rotation','auto'] as $k) {
                                     if (array_key_exists($k, $ovIt)) {
                                         $baseItems[$j][$k] = $ovIt[$k];
                                     }
@@ -141,7 +163,7 @@ Route::get('/photobook/pages', function (Request $r) {
     } catch (\Throwable $e) {
         // ignore
     }
-    // Inject webSrc for each item if missing (use relative URL to avoid wrong host)
+    // Inject webSrc for each item if missing (use relative URL first)
     foreach (($data['pages'] ?? []) as &$p) {
         foreach (($p['items'] ?? []) as &$it) {
             if (empty($it['webSrc']) && !empty($it['rel'])) {
@@ -151,6 +173,22 @@ Route::get('/photobook/pages', function (Request $r) {
         unset($it);
     }
     unset($p);
+    // Make webSrc absolute using current request host
+    try {
+        $origin = $r->getSchemeAndHttpHost();
+        foreach (($data['pages'] ?? []) as &$p2) {
+            foreach (($p2['items'] ?? []) as &$it2) {
+                if (isset($it2['webSrc']) && is_string($it2['webSrc']) && $it2['webSrc'] !== '' && $it2['webSrc'][0] === '/') {
+                    $it2['webSrc'] = $origin . $it2['webSrc'];
+                }
+            }
+            unset($it2);
+        }
+        unset($p2);
+        if (isset($data['cover']) && is_array($data['cover']) && isset($data['cover']['webSrc']) && is_string($data['cover']['webSrc']) && $data['cover']['webSrc'] !== '' && $data['cover']['webSrc'][0] === '/') {
+            $data['cover']['webSrc'] = $origin . $data['cover']['webSrc'];
+        }
+    } catch (\Throwable $e) {}
     return response()->json(['ok'=>true, 'data'=>$data]);
 });
 

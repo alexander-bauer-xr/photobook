@@ -22,6 +22,13 @@ export type PageItem = {
   photo?: Photo | null;
   scale?: number;
   rotate?: number; // degrees, clockwise. default 0
+  // Canonical fields used by new editor
+  fit?: 'cover' | 'contain';
+  align?: { x: number; y: number };
+  offset?: { x: number; y: number };
+  zoom?: number;
+  rotation?: number;
+  auto?: boolean;
   // Optional geometry overrides (normalized to page width/height, 0..1)
   x?: number;
   y?: number;

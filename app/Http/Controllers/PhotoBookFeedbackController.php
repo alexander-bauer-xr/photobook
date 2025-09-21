@@ -7,11 +7,6 @@ use Illuminate\Support\Facades\Config;
 
 class PhotoBookFeedbackController extends Controller
 {
-    /**
-     * POST /photobook/feedback
-     * Body: { folder?: string, page: int, action: string, reason?: string }
-     * Appends a JSON line to feedback.log in the cache root.
-     */
     public function submit(Request $request)
     {
         $folder = (string) $request->input('folder', Config::get('photobook.folder'));

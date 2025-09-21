@@ -1,19 +1,10 @@
-/*
-Copilot prompt:
-Main app:
-- React Query provider
-- folder input + load
-- prev/next page
-- EditorCanvas center, Sidebar right
-- drag to update objectPosition, swap reordering
-- Save -> POST /photobook/save-page
-*/
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { usePages } from './hooks/usePages';
 import EditorCanvas from './components/EditorCanvas';
 import Sidebar from './components/Sidebar';
 import ReplaceDrawer from './components/ReplaceDrawer';
+import PdfReadyModal from './components/PdfReadyModal';
 import { api } from './api/client';
 import { useTemplates } from './hooks/useTemplates';
 import { PB } from './lib/api';
@@ -34,14 +25,13 @@ function Root() {
   const [candidates, setCandidates] = useState([] as { path: string; filename: string; src?: string | null }[]);
   const [candLoading, setCandLoading] = useState(false);
   const [pageVersion, setPageVersion] = useState(0);
-  // Single editor mode (EditorCanvas only)
-  // Synthetic cover page state
   const [coverTitle, setCoverTitle] = useState('');
   const [coverPath, setCoverPath] = useState<string | null>(null);
   const [coverWebSrc, setCoverWebSrc] = useState<string | null>(null);
   const [isBuilding, setIsBuilding] = useState(false);
   const [buildProgress, setBuildProgress] = useState(0);
   const [buildMessage, setBuildMessage] = useState('');
+  const [latestPdfUrl, setLatestPdfUrl] = useState<string | null>(null);
   const progressTimer = useRef<number | null>(null);
   const templatesQ = useTemplates();
   useEffect(() => { api.getAlbums().then(r => setAlbums(r?.albums || [])).catch(() => { }); }, []);
@@ -110,10 +100,17 @@ function Root() {
         slotIndex: 0,
         src: coverWebSrc || undefined,
         photo: coverPath ? { path: coverPath, filename: (coverPath.split('/') || []).pop() } : null,
+        // legacy
         objectPosition: cov?.objectPosition || '50% 50%',
         crop: 'cover',
-        scale: cov?.scale || 1,
-        rotate: cov?.rotate || 0
+        scale: (typeof cov?.zoom === 'number' && cov?.zoom > 0) ? cov?.zoom : (cov?.scale || 1),
+        rotate: (Number.isFinite(cov?.rotation) ? Number(cov?.rotation) : (cov?.rotate || 0)),
+        // canonical
+        align: cov?.align || undefined,
+        offset: cov?.offset || { x: 0, y: 0 },
+        zoom: (typeof cov?.zoom === 'number' && cov?.zoom > 0) ? Number(cov?.zoom) : (cov?.scale || 1),
+        rotation: Number.isFinite(cov?.rotation) ? Number(cov?.rotation) : (cov?.rotate || 0),
+        auto: cov?.auto === true
       }],
     };
     return [coverPg, ...arr];
@@ -298,15 +295,39 @@ function Root() {
             if (pageIdx === 0) {
               if (!page) return;
               // Persist cover choice into page 1 overrides (legacy save)
+              const it0: any = page.items?.[0] || {};
+              const fit = it0.fit === 'contain' ? 'contain' : 'cover';
+              const align = {
+                x: Number.isFinite(Number(it0.align?.x)) ? Math.max(-1, Math.min(1, Number(it0.align.x))) : 0,
+                y: Number.isFinite(Number(it0.align?.y)) ? Math.max(-1, Math.min(1, Number(it0.align.y))) : 0,
+              };
+              const offset = {
+                x: Number.isFinite(Number(it0.offset?.x)) ? Number(it0.offset.x) : 0,
+                y: Number.isFinite(Number(it0.offset?.y)) ? Number(it0.offset.y) : 0,
+              };
+              const zoom = Number.isFinite(Number(it0.zoom)) && Number(it0.zoom) > 0
+                ? Number(it0.zoom)
+                : (Number.isFinite(Number(it0.scale)) && Number(it0.scale) > 0 ? Number(it0.scale) : 1);
+              const rotation = Number.isFinite(Number(it0.rotation))
+                ? Number(it0.rotation)
+                : (Number.isFinite(Number(it0.rotate)) ? Number(it0.rotate) : 0);
+              const objectPosition = `${Math.round(50 + align.x * 50)}% ${Math.round(50 + align.y * 50)}%`;
+
               await api.savePage({
                 folder, page: 1,
                 items: [{
                   slotIndex: 0,
-                  crop: 'cover', objectPosition: '50% 50%', scale: 1, rotate: 0,
-                  photo: page.items?.[0]?.photo || null,
-                  src: coverWebSrc || page.items?.[0]?.src || null,
+                  // canonical
+                  fit, align, offset, zoom, rotation, auto: !!it0.auto,
+                  ...(it0.photo?.path ? { photo: { path: it0.photo.path, ...(it0.photo.filename ? { filename: it0.photo.filename } : {}) } } : {}),
+                  src: (coverWebSrc || it0.src || null) as any,
+                  // legacy
+                  crop: fit,
+                  objectPosition,
+                  scale: zoom,
+                  rotate: rotation,
                 }],
-                templateId: page.templateId || null,
+                templateId: 'cover',
               });
               alert('Saved cover');
             } else {
@@ -324,74 +345,74 @@ function Root() {
               const hasAlbumHash = !!(albumHash && /^[a-f0-9]{40}$/i.test(albumHash));
               try {
                 // Persist cover via REST if available and albumHash exists
-
                 if (hasAlbumHash) {
                   try { await PB.setCover(albumHash, { title: coverTitle || '', image: coverPath || null }); } catch { }
                 }
 
                 setIsBuilding(true); setBuildProgress(0); setBuildMessage('Starting build...');
 
+                // Build payload
+                const payload: Record<string, string> = { folder };
+                if (coverTitle) payload.title = coverTitle;
+                if (coverPath) payload.cover_image = coverPath;
+
+                // Start build and determine which hash to poll
+                let buildHash = albumHash;
                 if (hasAlbumHash) {
-                  const payload: Record<string, string> = { folder };
-                  if (coverTitle) payload.title = coverTitle;
-                  if (coverPath) payload.cover_image = coverPath;
-
                   await PB.build(albumHash, payload);
+                } else {
+                  const r = await PB.buildByFolder(payload);
+                  buildHash = r?.hash || '';
+                }
 
-                  setBuildMessage('Build started successfully');
-                  if (progressTimer.current) { window.clearInterval(progressTimer.current); progressTimer.current = null; }
-                  progressTimer.current = window.setInterval(async () => {
-                    try {
-                      const r: any = await PB.progress(albumHash);
-                      const p = r?.status?.progress ?? 0;
-                      const msg = r?.status?.step || r?.status?.message || r?.status?.state || '';
-                      setBuildProgress(p);
-                      setBuildMessage(msg);
+                setBuildMessage('Build started successfully');
+                if (progressTimer.current) { window.clearInterval(progressTimer.current); progressTimer.current = null; }
+                const pollHash = buildHash; // capture for closure
+                progressTimer.current = window.setInterval(async () => {
+                  try {
+                    const r: any = await PB.progress(pollHash);
+                    const p = r?.status?.progress ?? 0;
+                    const msg = r?.status?.step || r?.status?.message || r?.status?.state || '';
+                    setBuildProgress(p);
+                    setBuildMessage(msg);
                       if (p >= 100) {
-                        if (progressTimer.current) { window.clearInterval(progressTimer.current); progressTimer.current = null; }
-                        setIsBuilding(false);
-                        setBuildMessage('Build complete!');
-                        setTimeout(() => setBuildMessage(''), 2000);
-                        q.refetch();
-                      }
-                    } catch (e) {
                       if (progressTimer.current) { window.clearInterval(progressTimer.current); progressTimer.current = null; }
                       setIsBuilding(false);
-                      setBuildMessage('Build completed (progress unavailable)');
-                      setTimeout(() => setBuildMessage(''), 2000);
+                      setBuildMessage('Build complete!');
+                        try {
+                          // Ask backend for latest PDF URL
+                          const lr = await fetch('/photobook/latest-pdf.json', { credentials: 'same-origin' });
+                          if (lr.ok) {
+                            const j = await lr.json();
+                            const url = j?.ok && j?.url ? String(j.url) : null;
+                            if (url) {
+                              setLatestPdfUrl(url);
+                              // Attempt to open in a new tab as well (some browsers may block if not user-initiated)
+                              try { window.open(url, '_blank', 'noopener'); } catch {}
+                            }
+                          }
+                        } catch {}
+                        setTimeout(() => setBuildMessage(''), 2000);
+                      q.refetch();
                     }
-                  }, 1000);
-                } else {
-                  const formData = new FormData();
-                  formData.append('folder', folder);
-                  if (coverTitle) formData.append('title', coverTitle);
-                  if (coverPath) formData.append('cover_image', coverPath);
-
-                  // Add CSRF token
-                  const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
-                  if (csrfToken) formData.append('_token', csrfToken);
-
-                  const buildResponse = await fetch('/photobook/build', {
-                    method: 'POST',
-                    body: formData,
-                    headers: {
-                      'X-Requested-With': 'XMLHttpRequest',
-                    },
-                    credentials: 'same-origin'
-                  });
-
-                  if (!buildResponse.ok) {
-                    throw new Error('Build request failed');
-                  }
-
-                  setBuildMessage('Build started successfully');
-
-                  setTimeout(() => {
+                  } catch (e) {
+                    if (progressTimer.current) { window.clearInterval(progressTimer.current); progressTimer.current = null; }
                     setIsBuilding(false);
-                    setBuildMessage('Build started - check logs');
+                    setBuildMessage('Build completed (progress unavailable)');
+                    try {
+                      const lr = await fetch('/photobook/latest-pdf.json', { credentials: 'same-origin' });
+                      if (lr.ok) {
+                        const j = await lr.json();
+                        const url = j?.ok && j?.url ? String(j.url) : null;
+                        if (url) {
+                          setLatestPdfUrl(url);
+                          try { window.open(url, '_blank', 'noopener'); } catch {}
+                        }
+                      }
+                    } catch {}
                     setTimeout(() => setBuildMessage(''), 2000);
-                  }, 2000);
-                }
+                  }
+                }, 1000);
 
               } catch (e) {
                 if (progressTimer.current) { window.clearInterval(progressTimer.current); progressTimer.current = null; }
@@ -488,6 +509,9 @@ function Root() {
         </div>
         <ReplaceDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} loading={candLoading} candidates={candidates} onPick={(c, o) => applyReplacement(c, o)} />
       </main>
+      {latestPdfUrl && (
+        <PdfReadyModal url={latestPdfUrl} onClose={() => setLatestPdfUrl(null)} />
+      )}
     </div>
   );
 }

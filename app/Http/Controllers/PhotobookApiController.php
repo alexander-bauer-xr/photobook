@@ -103,7 +103,7 @@ class PhotobookApiController extends Controller
         return response()->json(LayoutTemplates::all());
     }
 
-    public function getPages(string $hash)
+    public function getPages(Request $request, string $hash)
     {
         $path = $this->pagesPath($hash);
         if (!is_file($path))
@@ -118,6 +118,13 @@ class PhotobookApiController extends Controller
                     if (!empty($it['rel'])) {
                         $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']], false);
                         continue;
+                    }
+                    if (!empty($it['webSrc'])) {
+                        $normalized = $this->normalizeAssetUrl($hash, $it['webSrc']);
+                        if ($normalized) {
+                            $it['webSrc'] = $normalized;
+                            continue;
+                        }
                     }
                     if (!empty($it['web'])) {
                         $normalized = $this->normalizeAssetUrl($hash, $it['web']);
@@ -140,6 +147,19 @@ class PhotobookApiController extends Controller
             $ovPath = $this->albumDir($hash) . DIRECTORY_SEPARATOR . 'overrides.json';
             $overrides = is_file($ovPath) ? (json_decode(@file_get_contents($ovPath), true) ?: ['pages' => []]) : ['pages' => []];
             if (is_array($overrides['pages'] ?? null)) {
+                // Build template index id -> slots for quick lookup
+                $tplIndex = [];
+                try {
+                    $all = LayoutTemplates::all();
+                    foreach ($all as $count => $arr) {
+                        foreach ((array) $arr as $tpl) {
+                            $id = (string) ($tpl['id'] ?? '');
+                            if ($id !== '' && !empty($tpl['slots']) && is_array($tpl['slots'])) {
+                                $tplIndex[$id] = $tpl['slots'];
+                            }
+                        }
+                    }
+                } catch (\Throwable $e) {}
                 // Check for cover override (page "1" with templateId "cover")
                 $coverOv = $overrides['pages']['1'] ?? null;
                 if (is_array($coverOv) && ($coverOv['templateId'] ?? '') === 'cover') {
@@ -150,8 +170,13 @@ class PhotobookApiController extends Controller
                             if (!empty($coverItem['photo']['path'])) {
                                 $data['cover']['image'] = $coverItem['photo']['path'];
                             }
-                            // Add positioning and transformation properties
+                            // Add positioning and transformation properties (legacy and canonical)
                             foreach (['objectPosition', 'scale', 'rotate'] as $prop) {
+                                if (isset($coverItem[$prop])) {
+                                    $data['cover'][$prop] = $coverItem[$prop];
+                                }
+                            }
+                            foreach (['align','offset','zoom','rotation','auto'] as $prop) {
                                 if (isset($coverItem[$prop])) {
                                     $data['cover'][$prop] = $coverItem[$prop];
                                 }
@@ -171,8 +196,13 @@ class PhotobookApiController extends Controller
                     $pageNo = ($p['n'] ?? ($idx + 1));
                     $ov = $overrides['pages'][(string) $pageNo] ?? null;
                     if (is_array($ov)) {
-                        if (!empty($ov['templateId']))
+                        if (!empty($ov['templateId'])) {
                             $p['templateId'] = (string) $ov['templateId'];
+                            // If we know the template slots, reflect them so UI sees new geometry on reload
+                            if (!empty($tplIndex[$p['templateId']])) {
+                                $p['slots'] = $tplIndex[$p['templateId']];
+                            }
+                        }
                         if (is_array($ov['items'] ?? null) && !empty($ov['items'])) {
                             $bySlot = [];
                             foreach ($ov['items'] as $it) {
@@ -182,8 +212,13 @@ class PhotobookApiController extends Controller
                                 $si = (int) ($it['slotIndex'] ?? 0);
                                 if (isset($bySlot[$si])) {
                                     $ovI = $bySlot[$si];
+                                    // Legacy keys
                                     foreach (['crop', 'objectPosition', 'scale', 'rotate'] as $k)
-                                        if (isset($ovI[$k]))
+                                        if (array_key_exists($k, $ovI))
+                                            $it[$k] = $ovI[$k];
+                                    // Canonical keys (align/offset/zoom/rotation/auto)
+                                    foreach (['align','offset','zoom','rotation','auto'] as $k)
+                                        if (array_key_exists($k, $ovI))
                                             $it[$k] = $ovI[$k];
                                     if (!empty($ovI['photo']))
                                         $it['photo'] = $ovI['photo'];
@@ -203,6 +238,13 @@ class PhotobookApiController extends Controller
                         if (!empty($it['rel'])) {
                             $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']], false);
                             continue;
+                        }
+                        if (!empty($it['webSrc'])) {
+                            $normalized = $this->normalizeAssetUrl($hash, $it['webSrc']);
+                            if ($normalized) {
+                                $it['webSrc'] = $normalized;
+                                continue;
+                            }
                         }
                         if (!empty($it['web'])) {
                             $normalized = $this->normalizeAssetUrl($hash, $it['web']);
@@ -225,10 +267,34 @@ class PhotobookApiController extends Controller
         } catch (\Throwable $e) {
         }
 
+        // Make webSrc absolute using current request host if it's a root-relative path
+        try {
+            $origin = $request->getSchemeAndHttpHost();
+            foreach (($data['pages'] ?? []) as &$p) {
+                foreach (($p['items'] ?? []) as &$it) {
+                    if (isset($it['webSrc']) && is_string($it['webSrc']) && $it['webSrc'] !== '') {
+                        if ($it['webSrc'][0] === '/') {
+                            $it['webSrc'] = $origin . $it['webSrc'];
+                        } else if (preg_match('#^https?://#i', $it['webSrc'])) {
+                            $path = parse_url($it['webSrc'], PHP_URL_PATH);
+                            if (is_string($path) && preg_match('#^/photobook/asset/' . preg_quote($hash, '#') . '/#', $path)) {
+                                $it['webSrc'] = $origin . $path;
+                            }
+                        }
+                    }
+                }
+                unset($it);
+            }
+            unset($p);
+            if (isset($data['cover']) && is_array($data['cover']) && isset($data['cover']['webSrc']) && is_string($data['cover']['webSrc']) && $data['cover']['webSrc'] !== '' && $data['cover']['webSrc'][0] === '/') {
+                $data['cover']['webSrc'] = $origin . $data['cover']['webSrc'];
+            }
+        } catch (\Throwable $e) {
+        }
+
         return response()->json($data);
     }
 
-    // Accept either JSON-Patch array or partial object (merged recursively)
     public function patchPages(Request $req, string $hash)
     {
         $path = $this->pagesPath($hash);
@@ -369,6 +435,41 @@ class PhotobookApiController extends Controller
         ]));
 
         return response()->json(['ok' => true, 'status' => 'started']);
+    }
+
+    /**
+     * POST /api/photobook/build-folder
+     * Start a build for a folder that may not yet have an album hash (new album).
+     * Computes the hash from the folder, initializes the progress file, and dispatches the job.
+     * Returns the computed hash so the client can poll /api/photobook/progress/{hash}.
+     */
+    public function startBuildByFolder(Request $req)
+    {
+        $folder = (string) $req->input('folder', '');
+        if ($folder === '') {
+            return response()->json(['ok' => false, 'error' => 'folder required'], 422);
+        }
+
+        $options = [
+            'folder' => $folder,
+            'title' => (string) $req->input('title', ''),
+            'cover_image' => (string) $req->input('cover_image', ''),
+            'ui_triggered' => true,
+        ];
+        BuildPhotoBook::dispatch($options);
+
+        $hash = sha1($folder);
+        // Initialize progress file
+        $dir = $this->albumDir($hash);
+        @mkdir($dir, 0775, true);
+        @file_put_contents($dir . DIRECTORY_SEPARATOR . 'task.status.json', json_encode([
+            'state' => 'queued',
+            'progress' => 0,
+            'startedAt' => now()->toIso8601String(),
+            'step' => 'Queued',
+        ]));
+
+        return response()->json(['ok' => true, 'status' => 'started', 'hash' => $hash]);
     }
 
     public function progress(string $hash)

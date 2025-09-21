@@ -1,5 +1,6 @@
 <?php
 return [
+    'asset_origin' => env('PHOTOBOOK_ASSET_ORIGIN'),
     'folder'      => env('PHOTOBOOK_FOLDER', 'Photos'),
     'paper'       => env('PHOTOBOOK_PAPER', 'a4'),                 // a4 | a3
     'orientation' => env('PHOTOBOOK_ORIENTATION', 'landscape'),    // portrait | landscape

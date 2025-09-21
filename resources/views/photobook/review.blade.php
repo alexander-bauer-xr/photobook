@@ -5,6 +5,7 @@
 <head>
     <meta charset="utf-8">
     <title>Photobook Review</title>
+    <meta name="photobook-asset-origin" content="{{ request()->getSchemeAndHttpHost() }}">
     <style>
         body {
             font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif;
@@ -143,7 +144,8 @@
             @php($pos = $it['objectPosition'] ?? '50% 50%')
             @php($src = $it['webSrc'] ?? ($it['web'] ?? ($it['src'] ?? '')))
             <div class="thumb">
-                <div style="background-image:url('{{ $src }}'); background-position: {{ $pos }};"></div>
+                @php($bg = "background-image:url('" . e($src) . "'); background-position: " . e($pos) . ";")
+                <div style="{{ $bg }}"></div>
             </div>
             @endforeach
         </div>
@@ -152,6 +154,20 @@
     @endif
 
     <script>
+        // If any src accidentally remains root-relative, make it absolute to current origin
+        (function fixThumbUrls(){
+            try {
+                const origin = location.origin;
+                document.querySelectorAll('.thumb > div').forEach((el)=>{
+                    const st = el.style.backgroundImage || '';
+                    const m = st.match(/url\(["']?(.*?)["']?\)/);
+                    if (m && m[1] && m[1].startsWith('/')) {
+                        el.style.backgroundImage = `url(${origin}${m[1]})`;
+                    }
+                });
+            } catch {}
+        })();
+        
         async function send(ev, form) {
             ev.preventDefault();
             const fd = new FormData(form);

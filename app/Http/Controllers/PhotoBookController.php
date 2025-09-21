@@ -112,7 +112,7 @@ class PhotoBookController extends Controller
                 foreach (($p['items'] ?? []) as &$it) {
                     // 1) Prefer relative cache path mapping (stable across hosts)
                     if (!empty($it['rel'])) {
-                        // Use relative URL to avoid host issues in various environments
+                        // Build relative, will be absolutized below
                         $it['webSrc'] = route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']], false);
                         continue;
                     }
@@ -151,6 +151,28 @@ class PhotoBookController extends Controller
             }
         } catch (\Throwable $e) {
             // ignore
+        }
+
+        // Make webSrc absolute using current request host and re-host wrong-host absolute asset URLs
+        try {
+            $origin = $request->getSchemeAndHttpHost();
+            foreach ($pages as &$p2) {
+                foreach (($p2['items'] ?? []) as &$it2) {
+                    if (isset($it2['webSrc']) && is_string($it2['webSrc']) && $it2['webSrc'] !== '') {
+                        if ($it2['webSrc'][0] === '/') {
+                            $it2['webSrc'] = $origin . $it2['webSrc'];
+                        } else if (preg_match('#^https?://#i', $it2['webSrc'])) {
+                            $path = parse_url($it2['webSrc'], PHP_URL_PATH);
+                            if (is_string($path) && preg_match('#^/photobook/asset/' . preg_quote($hash, '#') . '/#', $path)) {
+                                $it2['webSrc'] = $origin . $path;
+                            }
+                        }
+                    }
+                }
+                unset($it2);
+            }
+            unset($p2);
+        } catch (\Throwable $e) {
         }
 
         // Build template options grouped by photo count
@@ -258,6 +280,31 @@ class PhotoBookController extends Controller
             // ignore inject errors; fall back to raw src
         }
 
+        // Make webSrc absolute using current request host and re-host wrong-host absolute asset URLs
+        try {
+            $origin = $request->getSchemeAndHttpHost();
+            foreach (($data['pages'] ?? []) as &$p) {
+                foreach (($p['items'] ?? []) as &$it) {
+                    if (isset($it['webSrc']) && is_string($it['webSrc']) && $it['webSrc'] !== '') {
+                        if ($it['webSrc'][0] === '/') {
+                            $it['webSrc'] = $origin . $it['webSrc'];
+                        } else if (preg_match('#^https?://#i', $it['webSrc'])) {
+                            $path = parse_url($it['webSrc'], PHP_URL_PATH);
+                            if (is_string($path) && preg_match('#^/photobook/asset/' . preg_quote($hash, '#') . '/#', $path)) {
+                                $it['webSrc'] = $origin . $path;
+                            }
+                        }
+                    }
+                }
+                unset($it);
+            }
+            unset($p);
+            if (isset($data['cover']) && is_array($data['cover']) && isset($data['cover']['webSrc']) && is_string($data['cover']['webSrc']) && $data['cover']['webSrc'] !== '' && $data['cover']['webSrc'][0] === '/') {
+                $data['cover']['webSrc'] = $origin . $data['cover']['webSrc'];
+            }
+        } catch (\Throwable $e) {
+        }
+
         return response()->json(['ok' => true, 'data' => $data]);
     }
 
@@ -338,6 +385,16 @@ class PhotoBookController extends Controller
                             $normalizedSrc = $this->normalizeAssetUrl($hash, $it['src'] ?? null);
                             if ($normalizedSrc) {
                                 $web = $normalizedSrc;
+                            }
+                        }
+                        if (is_string($web) && $web !== '') {
+                            if ($web[0] === '/') {
+                                $web = $request->getSchemeAndHttpHost() . $web;
+                            } else if (preg_match('#^https?://#i', $web)) {
+                                $path = parse_url($web, PHP_URL_PATH);
+                                if (is_string($path) && preg_match('#^/photobook/asset/' . preg_quote($hash, '#') . '/#', $path)) {
+                                    $web = $request->getSchemeAndHttpHost() . $path;
+                                }
                             }
                         }
                         $w = isset($ph['width']) ? (int) $ph['width'] : null;
