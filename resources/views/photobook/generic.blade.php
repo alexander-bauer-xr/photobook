@@ -9,6 +9,17 @@
   - Add optional per-item rotation support in Blade if we later export rotated slot renders (currently rotation handled in UI only).
 --}}
 {{-- $slots: array of rects; $items: [{photo, slotIndex, crop, objectPosition, src, caption}] --}}
+@php
+  $formatNumber = static function ($value, int $precision = 4): string {
+      $num = round((float) $value, $precision);
+      $str = number_format($num, $precision, '.', '');
+      $str = rtrim(rtrim($str, '0'), '.');
+      if ($str === '' || $str === '-0') {
+          $str = '0';
+      }
+      return $str;
+  };
+@endphp
 <div class="page">
   <div class="page-inner">
     @foreach($items as $it)
@@ -30,11 +41,44 @@
           } elseif (is_array($p)) {
             $label = $p['filename'] ?? (isset($p['path']) ? basename($p['path']) : '');
           }
+          $transform = is_array($it['transform'] ?? null) ? $it['transform'] : null;
+          $hasTransform = $transform && ($transform['imgWidth'] ?? 0) > 0 && ($transform['imgHeight'] ?? 0) > 0 && $src;
         @endphp
-  <div class="img"
-             aria-label="{{ $label }}"
-             style="background-image:url('{{ $src }}'); background-position: {{ $it['objectPosition'] ?? '50% 50%' }};">
-        </div>
+
+        @if($hasTransform)
+          @php
+            $imgW = max(0, (int) round($transform['imgWidth']));
+            $imgH = max(0, (int) round($transform['imgHeight']));
+            if ($imgW <= 0 || $imgH <= 0) {
+              $hasTransform = false;
+            }
+          @endphp
+        @endif
+
+        @if($hasTransform)
+          @php
+            $panX = $formatNumber($transform['panX'] ?? 0, 3) . 'px';
+            $panY = $formatNumber($transform['panY'] ?? 0, 3) . 'px';
+            $scaleStr = $formatNumber($transform['scale'] ?? 1, 6);
+            $rotStr = $formatNumber($transform['rotation'] ?? 0, 4);
+            $transformCss = "translate(-50%, -50%) translate({$panX}, {$panY}) rotate({$rotStr}deg) scale({$scaleStr})";
+          @endphp
+          <div class="slot-inner">
+            <img src="{{ $src }}"
+                 alt=""
+                 aria-label="{{ $label }}"
+                 style="width: {{ $imgW }}px; height: {{ $imgH }}px; max-width:none; max-height:none; transform: {{ $transformCss }};">
+          </div>
+        @else
+          @php
+            $pos = $it['objectPosition'] ?? '50% 50%';
+            $fitMode = (($it['fit'] ?? ($it['crop'] ?? 'cover')) === 'contain') ? 'contain' : 'cover';
+          @endphp
+          <div class="slot-inner slot-inner-legacy"
+               aria-label="{{ $label }}"
+               style="background-image:url('{{ e($src) }}'); background-position: {{ $pos }}; background-size: {{ $fitMode }};">
+          </div>
+        @endif
         @if(!empty($it['caption']))
           <div class="caption">{{ $it['caption'] }}</div>
         @endif

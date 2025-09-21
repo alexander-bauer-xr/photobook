@@ -27,7 +27,9 @@ Create the main layout for the PDF:
   overflow:hidden;
 }
 .slot { position:absolute; overflow:hidden; box-sizing:border-box; background:#fff; }
-.slot > .img { width:100%; height:100%; background-size:cover; background-repeat:no-repeat; background-origin: content-box; }
+.slot-inner { position:relative; width:100%; height:100%; overflow:hidden; background:#fff; }
+.slot-inner img { position:absolute; left:50%; top:50%; max-width:none; max-height:none; transform-origin:center center; display:block; }
+.slot-inner-legacy { width:100%; height:100%; background-repeat:no-repeat; background-origin: content-box; }
 .caption { font-size: 10pt; margin-top: 2mm; }
 </style>
 </head>

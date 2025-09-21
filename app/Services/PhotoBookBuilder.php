@@ -437,11 +437,15 @@ class PhotoBookBuilder
         }
 
         // After we have $map and before rendering HTML, compute per-slot images
+        $targetDpi = (int) ($options['target_dpi'] ?? config('photobook.optimize.target_dpi', 160));
+        $targetDpi = max(120, min(220, $targetDpi));
         [$pagePxW, $pagePxH] = $this->pagePixels(
             $options['paper'] ?? config('photobook.paper'),
             $options['orientation'] ?? config('photobook.orientation', 'landscape'),
-            (int) ($options['target_dpi'] ?? config('photobook.optimize.target_dpi', 160))
+            $targetDpi
         );
+        $gapMm = (float) ($options['page_gap_mm'] ?? config('photobook.page_gap_mm', 2.5));
+        $gapPx = max(0, (int) round($gapMm / 25.4 * $targetDpi));
         $opt = config('photobook.optimize', []);
         $focalCache = [];
         $cntFaces = 0;
@@ -494,9 +498,12 @@ class PhotoBookBuilder
 
                 $targetW = max(1, (int) round(($s['w'] ?? 1.0) * $pagePxW));
                 $targetH = max(1, (int) round(($s['h'] ?? 1.0) * $pagePxH));
+                $contentW = max(1, $targetW - $gapPx);
+                $contentH = max(1, $targetH - $gapPx);
 
                 $ext = strtolower(pathinfo($origLocal, PATHINFO_EXTENSION) ?: 'jpg');
                 $slotLocal = $this->buildSlotRender($origLocal, $ext, $targetW, $targetH, $opt);
+                [$renderW, $renderH] = @getimagesize($slotLocal) ?: [0, 0];
 
                 // file:/// for Dompdf
                 $file = realpath($slotLocal) ?: $slotLocal;
@@ -571,8 +578,8 @@ class PhotoBookBuilder
                     if (isset($ovI['objectPosition']) && !isset($ovI['align'])) {
                         $align = $this->posToAlignLegacy(
                             (string) $ovI['objectPosition'],
-                            $targetW,
-                            $targetH,
+                            $contentW,
+                            $contentH,
                             $iw,
                             $ih,
                             $fit,
@@ -612,12 +619,12 @@ class PhotoBookBuilder
                                 });
                                 $cx = max(0.0, min(1.0, (float) ($feat['faces'][0]['cx'] ?? 0.5)));
                                 $cy = max(0.0, min(1.0, (float) ($feat['faces'][0]['cy'] ?? 0.5)));
-                                $align = $this->focusToAlign($cx, $cy, $targetW, $targetH, $iw, $ih, $fit, $zoom);
+                                $align = $this->focusToAlign($cx, $cy, $contentW, $contentH, $iw, $ih, $fit, $zoom);
                                 $cntFaces++;
                             } elseif (!empty($feat['saliency']) && is_array($feat['saliency'])) {
                                 $cx = max(0.0, min(1.0, (float) ($feat['saliency']['cx'] ?? 0.5)));
                                 $cy = max(0.0, min(1.0, (float) ($feat['saliency']['cy'] ?? 0.5)));
-                                $align = $this->focusToAlign($cx, $cy, $targetW, $targetH, $iw, $ih, $fit, $zoom);
+                                $align = $this->focusToAlign($cx, $cy, $contentW, $contentH, $iw, $ih, $fit, $zoom);
                                 $cntSaliency++;
                             }
                         } else {
@@ -630,12 +637,12 @@ class PhotoBookBuilder
                                 });
                                 $cx = max(0.0, min(1.0, (float) ($faces[0]['cx'] ?? 0.5)));
                                 $cy = max(0.0, min(1.0, (float) ($faces[0]['cy'] ?? 0.5)));
-                                $align = $this->focusToAlign($cx, $cy, $targetW, $targetH, $iw, $ih, $fit, $zoom);
+                                $align = $this->focusToAlign($cx, $cy, $contentW, $contentH, $iw, $ih, $fit, $zoom);
                                 $cntFaces++;
                             } elseif (!empty($feat->saliency) && is_array($feat->saliency)) {
                                 $cx = max(0.0, min(1.0, (float) ($feat->saliency['cx'] ?? 0.5)));
                                 $cy = max(0.0, min(1.0, (float) ($feat->saliency['cy'] ?? 0.5)));
-                                $align = $this->focusToAlign($cx, $cy, $targetW, $targetH, $iw, $ih, $fit, $zoom);
+                                $align = $this->focusToAlign($cx, $cy, $contentW, $contentH, $iw, $ih, $fit, $zoom);
                                 $cntSaliency++;
                             }
                         }
@@ -645,7 +652,7 @@ class PhotoBookBuilder
                     if ($auto && !$align) {
                         $hasPlannerPos = isset($it['objectPosition']) && trim((string) $it['objectPosition']) !== '' && trim((string) $it['objectPosition']) !== '50% 50%';
                         if ($hasPlannerPos) {
-                            $align = $this->posToAlignLegacy((string) $it['objectPosition'], $targetW, $targetH, $iw, $ih, $fit, $zoom);
+                            $align = $this->posToAlignLegacy((string) $it['objectPosition'], $contentW, $contentH, $iw, $ih, $fit, $zoom);
                         }
                     }
 
@@ -655,7 +662,7 @@ class PhotoBookBuilder
                             $focalCache[$origLocal] = $this->detectFocalPointForFile($origLocal); // [fx,fy] 0..1
                         }
                         [$fx, $fy] = $focalCache[$origLocal];
-                        $align = $this->focusToAlign((float) $fx, (float) $fy, $targetW, $targetH, $iw, $ih, $fit, $zoom);
+                        $align = $this->focusToAlign((float) $fx, (float) $fy, $contentW, $contentH, $iw, $ih, $fit, $zoom);
                         $cntFallback++;
                     }
                 }
@@ -672,6 +679,26 @@ class PhotoBookBuilder
                 $it['zoom'] = $zoom;
                 $it['rotation'] = $rotation;
                 $it['auto'] = $auto;
+
+                $transform = $this->computeItemTransform(
+                    $targetW,
+                    $targetH,
+                    $contentW,
+                    $contentH,
+                    $gapPx,
+                    $iw,
+                    $ih,
+                    $renderW ?? 0,
+                    $renderH ?? 0,
+                    $align,
+                    $offset,
+                    $fit,
+                    $zoom,
+                    $rotation
+                );
+                if ($transform) {
+                    $it['transform'] = $transform;
+                }
 
                 $items[] = $it;
             }
@@ -920,6 +947,75 @@ class PhotoBookBuilder
             'overflowX' => max(0.0, $fw - $slotW),
             'overflowY' => max(0.0, $fh - $slotH),
             'scale' => $scale,
+        ];
+    }
+
+    private function alignOffsetToPanPx(array $align, array $offset, float $overflowX, float $overflowY, int $slotW, int $slotH): array
+    {
+        $ax = is_array($align) ? floatval($align['x'] ?? 0.0) : 0.0;
+        $ay = is_array($align) ? floatval($align['y'] ?? 0.0) : 0.0;
+        $offX = is_array($offset) ? floatval($offset['x'] ?? 0.0) : 0.0;
+        $offY = is_array($offset) ? floatval($offset['y'] ?? 0.0) : 0.0;
+        $panX = ($overflowX / 2.0) * $ax + $offX * $slotW;
+        $panY = ($overflowY / 2.0) * $ay + $offY * $slotH;
+        return ['panX' => $panX, 'panY' => $panY];
+    }
+
+    private function computeItemTransform(
+        int $slotW,
+        int $slotH,
+        int $contentW,
+        int $contentH,
+        int $gapPx,
+        int $iw,
+        int $ih,
+        int $renderW,
+        int $renderH,
+        array $align,
+        array $offset,
+        string $fit,
+        float $zoom,
+        float $rotation
+    ): ?array {
+        if ($slotW <= 0 || $slotH <= 0 || $contentW <= 0 || $contentH <= 0 || $iw <= 0 || $ih <= 0) {
+            return null;
+        }
+        $math = $this->fitMath($contentW, $contentH, $iw, $ih, $fit, $zoom);
+        $pan = $this->alignOffsetToPanPx($align, $offset, $math['overflowX'], $math['overflowY'], $contentW, $contentH);
+
+        $imgW = ($renderW > 0) ? $renderW : $iw;
+        $imgH = ($renderH > 0) ? $renderH : $ih;
+        if ($imgW <= 0 || $imgH <= 0) {
+            return null;
+        }
+
+        $scale = $math['scale'];
+        if ($renderW > 0 && $iw > 0) {
+            $scale *= ($iw / max(1.0, (float) $renderW));
+        }
+        if (!is_finite($scale) || $scale <= 0) {
+            $scale = $math['scale'];
+        }
+
+        $panX = is_array($pan) ? floatval($pan['panX'] ?? 0.0) : 0.0;
+        $panY = is_array($pan) ? floatval($pan['panY'] ?? 0.0) : 0.0;
+
+        return [
+            'slotWidth' => $slotW,
+            'slotHeight' => $slotH,
+            'contentWidth' => $contentW,
+            'contentHeight' => $contentH,
+            'innerPad' => (int) floor(max(0.0, (float) $gapPx) / 2),
+            'imgWidth' => $imgW,
+            'imgHeight' => $imgH,
+            'scale' => round((float) $scale, 6),
+            'panX' => round($panX, 4),
+            'panY' => round($panY, 4),
+            'rotation' => round($rotation, 4),
+            'overflowX' => round((float) $math['overflowX'], 4),
+            'overflowY' => round((float) $math['overflowY'], 4),
+            'fit' => $fit,
+            'zoom' => round($zoom, 4),
         ];
     }
 
