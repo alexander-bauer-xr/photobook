@@ -199,6 +199,11 @@ function Root() {
       setFeedbackSending(false);
     }
   };
+  const isLoading = q.isLoading;
+  const isError = q.isError;
+  const hasPage = !!page;
+  const canEditPage = hasPage && !isLoading && !isError;
+  const pageLabel = pageIdx === 0 ? 'Cover' : (page ? `Page ${page.n}` : `Page ${pageIdx + 1}`)
 
   const updateItemObjectPos = (idx: number, xPct: number, yPct: number) => {
     if (!page) return;
@@ -351,12 +356,6 @@ function Root() {
     setDrawerOpen(false);
     setPageVersion(v => v + 1);
   };
-
-
-  if (q.isLoading) return <div className="p-6">Loading…</div>;
-  if (q.isError) return <div className="p-6 text-red-600">Failed to load pages.json</div>;
-  if (!page) return <div className="p-6">No pages.json yet. Folder: {folder}</div>;
-
   return (
     <div className="h-screen flex">
       <main className="flex-1 p-4 flex flex-col gap-3">
@@ -371,7 +370,7 @@ function Root() {
           </select>
           <div className="flex items-center gap-2 ml-6">
             <button disabled={pageIdx <= 0} className="px-3 py-1 rounded bg-neutral-200 disabled:opacity-50" onClick={() => setPageIdx(p => Math.max(0, p - 1))}>Prev</button>
-            <div className="text-sm">{pageIdx === 0 ? 'Cover' : `Page ${page.n}`}</div>
+            <div className="text-sm">{pageLabel}</div>
             <button disabled={displayPages.length <= pageIdx + 1} className="px-3 py-1 rounded bg-neutral-200 disabled:opacity-50" onClick={() => setPageIdx(p => p + 1)}>Next</button>
           </div>
           <form className="ml-auto flex items-center gap-2 border-l border-neutral-200 pl-3" onSubmit={handleFeedbackSubmit}>
@@ -447,7 +446,7 @@ function Root() {
             } else {
               await save();
             }
-          }}>{pageIdx === 0 ? 'Save cover' : 'Save'}</button>
+          }} disabled={!canEditPage}>{pageIdx === 0 ? 'Save cover' : 'Save'}</button>
           <button
             className="px-3 py-1 rounded bg-green-600 text-white disabled:opacity-60"
             disabled={!folder || isBuilding}
@@ -549,92 +548,127 @@ function Root() {
           <div className="mt-2 flex items-center gap-2">
             <label className="text-sm">Title</label>
             <input className="border border-neutral-300 rounded px-2 py-1 w-80" value={coverTitle} onChange={e => setCoverTitle(e.target.value)} placeholder="Cover title" />
-            <button className="px-3 py-1 rounded bg-neutral-200" onClick={() => openReplace(0)}>Choose cover photo…</button>
+            <button className="px-3 py-1 rounded bg-neutral-200 disabled:opacity-50" disabled={!canEditPage} onClick={() => openReplace(0)}>Choose cover photo…</button>
             {coverWebSrc ? <img src={coverWebSrc} alt="cover" className="h-10 rounded border" /> : <span className="text-xs text-neutral-500">No image</span>}
           </div>
         )}
 
         <div className="flex-1 flex gap-4 overflow-hidden">
           <div className="flex-1 flex items-center justify-center overflow-auto">
-            <EditorCanvas
-              page={page}
-              version={pageVersion}
-              onChange={(items) => { if (page) { page.items = items as any; setPageVersion(v => v + 1); } }}
-              onSave={async (items: any[]) => {
-                if (!page) return;
-                await api.savePage({
-                  folder,
-                  page: page.n,
-                  items: items.map((it: any) => {
-                    const fit = it.fit === 'contain' ? 'contain' : 'cover';
-                    const align = { x: clamp01(Number(it.align?.x ?? 0)), y: clamp01(Number(it.align?.y ?? 0)) };
-                    const offset = { x: Number(it.offset?.x) || 0, y: Number(it.offset?.y) || 0 };
-                    const zoom = isPos(it.zoom) ? Number(it.zoom) : 1;
-                    const rotation = Number.isFinite(Number(it.rotation)) ? Number(it.rotation) : 0;
-                    const objectPosition = `${Math.round(50 + align.x * 50)}% ${Math.round(50 + align.y * 50)}%`;
-                    const caption =
-                      typeof it.caption === 'string'
-                        ? it.caption
-                        : typeof it.caption === 'number'
-                          ? String(it.caption)
-                          : undefined;
+            {isLoading ? (
+              <div className="text-sm text-neutral-500">Loading pages…</div>
+            ) : isError ? (
+              <div className="text-sm text-red-600">Failed to load pages.json</div>
+            ) : !page ? (
+              <div className="text-sm text-neutral-500 text-center">
+                {folder ? `No pages.json yet. Folder: ${folder}` : 'Select an album to load pages.'}
+              </div>
+            ) : (
+              <EditorCanvas
+                page={page}
+                version={pageVersion}
+                onChange={(items) => { if (page) { page.items = items as any; setPageVersion(v => v + 1); } }}
+                onSave={async (items: any[]) => {
+                  if (!page) return;
+                  await api.savePage({
+                    folder,
+                    page: page.n,
+                    items: items.map((it: any) => {
+                      const fit = it.fit === 'contain' ? 'contain' : 'cover';
+                      const align = { x: clamp01(Number(it.align?.x ?? 0)), y: clamp01(Number(it.align?.y ?? 0)) };
+                      const offset = { x: Number(it.offset?.x) || 0, y: Number(it.offset?.y) || 0 };
+                      const zoom = isPos(it.zoom) ? Number(it.zoom) : 1;
+                      const rotation = Number.isFinite(Number(it.rotation)) ? Number(it.rotation) : 0;
+                      const objectPosition = `${Math.round(50 + align.x * 50)}% ${Math.round(50 + align.y * 50)}%`;
+                      const caption =
+                        typeof it.caption === 'string'
+                          ? it.caption
+                          : typeof it.caption === 'number'
+                            ? String(it.caption)
+                            : undefined;
 
-                    return {
-                      slotIndex: it.slotIndex,
+                      return {
+                        slotIndex: it.slotIndex,
 
-                      // canonical
-                      fit, align, offset, zoom, rotation, auto: !!it.auto,
-                      ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {}),
-                      ...(it.src ? { src: it.src } : {}),
-                      ...(caption !== undefined ? { caption } : {}),
+                        // canonical
+                        fit, align, offset, zoom, rotation, auto: !!it.auto,
+                        ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {}),
+                        ...(it.src ? { src: it.src } : {}),
+                        ...(caption !== undefined ? { caption } : {}),
 
-                      // legacy
-                      crop: fit,
-                      objectPosition,
-                      scale: zoom,
-                      rotate: rotation,
-                    };
-                  }),
-                  templateId: page.templateId || null,
-                });
-                alert('Saved page overrides');
-              }}
+                        // legacy
+                        crop: fit,
+                        objectPosition,
+                        scale: zoom,
+                        rotate: rotation,
+                      };
+                    }),
+                    templateId: page.templateId || null,
+                  });
+                  alert('Saved page overrides');
+                }}
 
-            />
+              />
+            )}
           </div>
-          <Sidebar page={page} onSwap={swapItems} onReplace={openReplace} onUpdateItem={(idx, changes) => {
-            if (!page) return;
-            const existing = page.items?.[idx];
-            if (!existing) return;
-            page.items[idx] = { ...existing, ...changes };
-            setPageVersion(v => v + 1);
-          }} onTemplateChange={async (tpl) => {
-            if (!page) return;
-            if (pageIdx === 0) return; // no template selection for cover
-            // Apply slots from selected template immediately in UI
-            try {
-              const groups = templatesQ.data || {} as any;
-              const count = Array.isArray(page.items) ? page.items.length : 0;
-              const arr = (groups[String(count)] || groups[count] || []) as any[];
-              const match = arr.find((t:any) => t.id === tpl);
-              if (match && Array.isArray(match.slots)) {
-                page.templateId = tpl;
-                // Replace slots with the chosen template's geometry
-                page.slots = match.slots.map((s:any)=>({ x: s.x, y: s.y, w: s.w, h: s.h, ...(s.ar?{ ar: s.ar }: {}) }));
-                // Reassign items' slotIndex to sequential indices matching new slots
-                page.items = (page.items || []).map((it:any, i:number) => ({ ...it, slotIndex: i }));
-                setPageVersion(v => v + 1);
-              } else {
-                // Fallback: still set templateId so backend override persists
-                page.templateId = tpl;
-                setPageVersion(v => v + 1);
-              }
-            } catch {}
-            await api.overrideTemplate({ folder, page: page.n, templateId: tpl });
-            alert('Template set to ' + tpl);
-          }} />
+          {isLoading ? (
+            <aside className="w-72 p-3 bg-white border-l border-neutral-200 flex items-center justify-center text-sm text-neutral-500">
+              Loading pages…
+            </aside>
+          ) : isError ? (
+            <aside className="w-72 p-3 bg-white border-l border-neutral-200 flex items-center justify-center text-sm text-red-600 text-center">
+              Unable to load pages.json.
+            </aside>
+          ) : !page ? (
+            <aside className="w-72 p-3 bg-white border-l border-neutral-200 flex items-center justify-center text-sm text-neutral-500 text-center">
+              {folder ? `No pages found for ${folder}.` : 'No page data yet.'}
+            </aside>
+          ) : (
+            <Sidebar page={page} onSwap={swapItems} onReplace={openReplace} onUpdateItem={(idx, changes) => {
+              if (!page) return;
+              const existing = page.items?.[idx];
+              if (!existing) return;
+              page.items[idx] = { ...existing, ...changes };
+              setPageVersion(v => v + 1);
+            }} onTemplateChange={async (tpl) => {
+              if (!page) return;
+              if (pageIdx === 0) return; // no template selection for cover
+              // Apply slots from selected template immediately in UI
+              try {
+                const groups = templatesQ.data || {} as any;
+                const count = Array.isArray(page.items) ? page.items.length : 0;
+                const arr = (groups[String(count)] || groups[count] || []) as any[];
+                const match = arr.find((t:any) => t.id === tpl);
+                if (match && Array.isArray(match.slots)) {
+                  page.templateId = tpl;
+                  // Replace slots with the chosen template's geometry
+                  page.slots = match.slots.map((s:any)=>({ x: s.x, y: s.y, w: s.w, h: s.h, ...(s.ar?{ ar: s.ar }: {}) }));
+                  // Reassign items' slotIndex to sequential indices matching new slots
+                  page.items = (page.items || []).map((it:any, i:number) => ({ ...it, slotIndex: i }));
+                  setPageVersion(v => v + 1);
+                } else {
+                  // Fallback: still set templateId so backend override persists
+                  page.templateId = tpl;
+                  setPageVersion(v => v + 1);
+                }
+              } catch {}
+              await api.overrideTemplate({ folder, page: page.n, templateId: tpl });
+              alert('Template set to ' + tpl);
+            }} />
+          )}
         </div>
-        <ReplaceDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} loading={candLoading} candidates={candidates} onPick={(c, o) => applyReplacement(c, o)} />
+        {drawerOpen && !canEditPage && (
+          <div className="fixed inset-0 z-50">
+            <div className="absolute inset-0 bg-black/40" onClick={() => setDrawerOpen(false)} />
+            <div className="absolute right-0 top-0 h-full w-[420px] bg-white shadow-xl border-l border-neutral-200 flex flex-col items-center justify-center gap-3 p-6 text-center">
+              <div className="text-sm text-neutral-700">
+                {isLoading ? 'Loading pages…' : isError ? 'Unable to load page data.' : 'No page data available.'}
+              </div>
+              <button className="px-3 py-1 text-sm rounded bg-neutral-200" onClick={() => setDrawerOpen(false)}>Close</button>
+            </div>
+          </div>
+        )}
+        <ReplaceDrawer open={drawerOpen && canEditPage} onClose={() => setDrawerOpen(false)} loading={candLoading} candidates={candidates} onPick={(c, o) => applyReplacement(c, o)} />
       </main>
       {latestPdfUrl && (
         <PdfReadyModal url={latestPdfUrl} onClose={() => setLatestPdfUrl(null)} />
