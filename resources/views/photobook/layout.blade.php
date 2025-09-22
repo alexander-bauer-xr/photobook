@@ -30,7 +30,23 @@ Create the main layout for the PDF:
 .slot-inner { position:relative; width:100%; height:100%; overflow:hidden; background:#fff; }
 .slot-inner img { position:absolute; left:50%; top:50%; max-width:none; max-height:none; transform-origin:center center; display:block; }
 .slot-inner-legacy { width:100%; height:100%; background-repeat:no-repeat; background-origin: content-box; }
-.caption { font-size: 10pt; margin-top: 2mm; }
+.caption {
+  position:absolute;
+  left: calc(var(--gap-mm) / 2);
+  right: calc(var(--gap-mm) / 2);
+  bottom: calc(var(--gap-mm) / 2);
+  font-size: 10pt;
+  line-height: 1.25;
+  padding: 1.4mm 1.8mm;
+  background: rgba(255, 255, 255, 0.88);
+  color: #1f2937;
+  border-radius: 1.2mm;
+  text-align: center;
+  word-break: break-word;
+  pointer-events: none;
+  box-shadow: 0 0.6mm 2.4mm rgba(0, 0, 0, 0.12);
+  z-index: 3;
+}
 </style>
 </head>
 <body>
