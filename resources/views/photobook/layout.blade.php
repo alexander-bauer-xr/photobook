@@ -8,6 +8,7 @@ Create the main layout for the PDF:
 <html>
 <head>
 <meta charset="utf-8">
+<title>{{ isset($options['title']) && trim((string)$options['title']) !== '' ? $options['title'] : config('photobook.cover.title') }}</title>
 <style>
 @page { margin: {{ (int) config('photobook.margin_mm', 0) }}mm; }
 /* CSS variables for consistent units */
