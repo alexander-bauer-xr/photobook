@@ -10,6 +10,16 @@ import { useTemplates } from './hooks/useTemplates';
 import { PB } from './lib/api';
 // Using dynamic page typing to allow merged overrides shape
 
+const FEEDBACK_ACTIONS = [
+  { value: 'like', label: 'Like' },
+  { value: 'dislike', label: 'Dislike' },
+  { value: 'faces-cropped', label: 'Faces Cropped' },
+  { value: 'too-repetitive', label: 'Too Repetitive' },
+  { value: 'low-confidence', label: 'Low Confidence' },
+] as const;
+
+const DEFAULT_FEEDBACK_ACTION = FEEDBACK_ACTIONS[0]?.value ?? 'like';
+
 const qc = new QueryClient();
 
 export default function App() {
@@ -33,6 +43,18 @@ function Root() {
   const [buildMessage, setBuildMessage] = useState('');
   const [latestPdfUrl, setLatestPdfUrl] = useState<string | null>(null);
   const progressTimer = useRef<number | null>(null);
+  const feedbackTimer = useRef<number | null>(null);
+  const [feedbackAction, setFeedbackAction] = useState(DEFAULT_FEEDBACK_ACTION);
+  const [feedbackReason, setFeedbackReason] = useState('');
+  const [feedbackSending, setFeedbackSending] = useState(false);
+  const [feedbackSuccess, setFeedbackSuccess] = useState<string | null>(null);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const clearFeedbackTimer = () => {
+    if (feedbackTimer.current) {
+      window.clearTimeout(feedbackTimer.current);
+      feedbackTimer.current = null;
+    }
+  };
   const templatesQ = useTemplates();
   useEffect(() => { api.getAlbums().then(r => setAlbums(r?.albums || [])).catch(() => { }); }, []);
   useEffect(() => {
@@ -43,6 +65,7 @@ function Root() {
       if (first) setFolder(first.folder || first.hash);
     }
   }, [albums]);
+  useEffect(() => () => { clearFeedbackTimer(); }, []);
   const { pagesQ: q, pages } = usePages(folder);
   // Build a web URL for cached assets from an absolute path like .../_cache/<hash>/<rel>
   const filePathToAssetUrl = (p?: string | null): string | null => {
@@ -121,8 +144,61 @@ function Root() {
     return displayPages[Math.max(0, Math.min(pageIdx, displayPages.length - 1))] as any;
   }, [displayPages, pageIdx]) as any;
 
+  useEffect(() => {
+    clearFeedbackTimer();
+    setFeedbackAction(DEFAULT_FEEDBACK_ACTION);
+    setFeedbackReason('');
+    setFeedbackSuccess(null);
+    setFeedbackError(null);
+    setFeedbackSending(false);
+  }, [pageIdx, page?.n]);
+
   const currentAlbum = useMemo(() => albums.find(a => (a.folder || a.hash) === folder) || null, [albums, folder]);
   const albumHash = currentAlbum?.hash || '';
+  const canSubmitFeedback = pageIdx > 0 && !!page;
+  const handleFeedbackSubmit = async (event?: React.FormEvent<HTMLFormElement>) => {
+    if (event) event.preventDefault();
+    if (!canSubmitFeedback || !page) return;
+
+    const action = feedbackAction || DEFAULT_FEEDBACK_ACTION;
+    const pageNumber = Number(page?.n ?? 0);
+    if (!Number.isFinite(pageNumber) || pageNumber <= 0) {
+      clearFeedbackTimer();
+      setFeedbackError('Feedback requires a valid interior page');
+      setFeedbackSuccess(null);
+      return;
+    }
+
+    const reason = feedbackReason.trim();
+
+    setFeedbackSending(true);
+    try {
+      const result = await api.submitFeedback({
+        folder,
+        page: pageNumber,
+        action,
+        ...(reason ? { reason } : {}),
+      });
+      if (!result?.ok) {
+        throw new Error('Feedback was not accepted');
+      }
+      clearFeedbackTimer();
+      setFeedbackSuccess('Feedback sent');
+      setFeedbackError(null);
+      setFeedbackReason('');
+      feedbackTimer.current = window.setTimeout(() => {
+        setFeedbackSuccess(null);
+        feedbackTimer.current = null;
+      }, 3000);
+    } catch (err) {
+      clearFeedbackTimer();
+      const message = err instanceof Error ? err.message : 'Failed to send feedback';
+      setFeedbackError(message || 'Failed to send feedback');
+      setFeedbackSuccess(null);
+    } finally {
+      setFeedbackSending(false);
+    }
+  };
 
   const updateItemObjectPos = (idx: number, xPct: number, yPct: number) => {
     if (!page) return;
@@ -298,7 +374,38 @@ function Root() {
             <div className="text-sm">{pageIdx === 0 ? 'Cover' : `Page ${page.n}`}</div>
             <button disabled={displayPages.length <= pageIdx + 1} className="px-3 py-1 rounded bg-neutral-200 disabled:opacity-50" onClick={() => setPageIdx(p => p + 1)}>Next</button>
           </div>
-          <button className="ml-auto px-3 py-1 rounded bg-blue-600 text-white" onClick={async () => {
+          <form className="ml-auto flex items-center gap-2 border-l border-neutral-200 pl-3" onSubmit={handleFeedbackSubmit}>
+            <span className="text-sm text-neutral-600">Feedback</span>
+            <select
+              aria-label="Feedback action"
+              className="border border-neutral-300 rounded px-2 py-1 text-sm disabled:opacity-50"
+              value={feedbackAction}
+              onChange={e => setFeedbackAction(e.target.value)}
+              disabled={!canSubmitFeedback || feedbackSending}
+            >
+              {FEEDBACK_ACTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            <input
+              className="border border-neutral-300 rounded px-2 py-1 text-sm w-48 disabled:opacity-50"
+              type="text"
+              placeholder="Optional note"
+              value={feedbackReason}
+              onChange={e => setFeedbackReason(e.target.value)}
+              disabled={!canSubmitFeedback || feedbackSending}
+            />
+            <button
+              type="submit"
+              className="px-3 py-1 rounded bg-neutral-200 text-sm disabled:opacity-50"
+              disabled={!canSubmitFeedback || feedbackSending}
+            >
+              {feedbackSending ? 'Sending…' : 'Send'}
+            </button>
+            {feedbackSuccess && <span className="text-xs text-green-600">{feedbackSuccess}</span>}
+            {feedbackError && !feedbackSuccess && <span className="text-xs text-red-600">{feedbackError}</span>}
+          </form>
+          <button className="px-3 py-1 rounded bg-blue-600 text-white ml-3" onClick={async () => {
             if (pageIdx === 0) {
               if (!page) return;
               // Persist cover choice into page 1 overrides (legacy save)
