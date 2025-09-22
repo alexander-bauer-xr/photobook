@@ -1,0 +1,19 @@
+services:
+  app:
+    image: mcr.microsoft.com/devcontainers/php:8.2-bullseye
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace:cached
+    command: bash -lc "bash .devcontainer/postCreate.sh && npm run dev:all"
+    ports:
+      - "8000:8000"
+      - "5173:5173"
+    environment:
+      - APP_ENV=local
+      - APP_DEBUG=true
+      - APP_URL=http://127.0.0.1:8000
+      - QUEUE_CONNECTION=database
+      - CACHE_DRIVER=file
+      - SESSION_DRIVER=file
+      - DB_CONNECTION=sqlite
+      - DB_DATABASE=/workspace/database/database.sqlite

@@ -25,14 +25,12 @@
         <div style="position:absolute; left:0; top:0; right:0; height:65%; overflow:hidden; background:#000;">
             @if(!empty($opts['cover_image_src']) || !empty($opts['cover_image_web']))
                 @php
-                    $pos = $opts['cover_object_position'] ?? '50% 50%';
-                    // Note: Dompdf has limited support for object-fit/transform. Use background-image like generic pages.
-                    $bg = $opts['cover_image_src'] ?? $opts['cover_image_web'];
+                    $img = $opts['cover_image_src'] ?? $opts['cover_image_web'];
                 @endphp
-                <div style="position:absolute; top:0; left:0; right:0; bottom:0; background-image:url('{{ $bg }}'); background-size: cover; background-repeat: no-repeat; background-position: {{ $pos }};"></div>
+                <img src="{{ $img }}" alt="" style="position:absolute; left:50%; top:50%; transform: translate(-50%, -50%); width:100%; height:100%; max-width:none; max-height:none; object-fit: cover;" />
             @endif
             @if(!empty($coverTitle))
-                <div style="position:absolute; left:0; right:0; bottom:12mm; text-align:center; color:#fff; font-size:28pt; font-weight:600; text-shadow:0 2px 6px rgba(0,0,0,.6);">
+                <div style="position:absolute; left:0; right:0; bottom:12mm; z-index:2; text-align:center; color:#fff; font-size:28pt; font-weight:600; text-shadow:0 2px 6px rgba(0,0,0,.6);">
                     {{ $coverTitle }}
                 </div>
             @endif
@@ -40,6 +38,9 @@
         <!-- Bottom white band with title/subtitle/date (remaining 35%) -->
         <div style="position:absolute; left:0; right:0; top:65%; bottom:0; background:#fff; display:flex; align-items:center; justify-content:center;">
             <div style="text-align:center; padding: 8mm 6mm;">
+                @if(!empty($coverTitle))
+                    <div style="font-size: 16pt; color:#222; font-weight:600;">{{ $coverTitle }}</div>
+                @endif
                 @if(isset($coverSubtitle) && trim((string)$coverSubtitle) !== '')
                     <div style="font-size: 12pt; color:#555; margin-top: 6px;">{{ $coverSubtitle ?? '' }}</div>
                 @endif
