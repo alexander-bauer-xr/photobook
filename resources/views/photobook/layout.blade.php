@@ -12,9 +12,19 @@ Create the main layout for the PDF:
 <style>
 @page { margin: {{ (int) config('photobook.margin_mm', 0) }}mm; }
 /* CSS variables for consistent units */
+@php
+    $gapMm = (float) config('photobook.page_gap_mm', 2.5);
+    $gapHalfMm = $gapMm / 2;
+    $formatMm = static function (float $value): string {
+        $formatted = number_format($value, 6, '.', '');
+        return rtrim(rtrim($formatted, '0'), '.');
+    };
+    $gapMmStr = $formatMm($gapMm);
+    $gapHalfMmStr = $formatMm($gapHalfMm);
+@endphp
 :root {
   --frame-mm: {{ (float) config('photobook.page_frame_mm', 6) }}mm;
-  --gap-mm:   {{ (float) config('photobook.page_gap_mm', 2.5) }}mm;
+  --gap-mm:   {{ $gapMmStr }}mm;
   --eps-mm:   0.15mm;
 }
 .page { position: relative; page-break-after: always; }
@@ -33,9 +43,9 @@ Create the main layout for the PDF:
 .slot-inner-legacy { width:100%; height:100%; background-repeat:no-repeat; background-origin: content-box; }
 .caption {
   position:absolute;
-  left: calc(var(--gap-mm) / 2);
-  right: calc(var(--gap-mm) / 2);
-  bottom: calc(var(--gap-mm) / 2);
+  left: {{ $gapHalfMmStr }}mm;
+  right: {{ $gapHalfMmStr }}mm;
+  bottom: {{ $gapHalfMmStr }}mm;
   font-size: 10pt;
   line-height: 1.25;
   padding: 1.4mm 1.8mm;
@@ -55,9 +65,19 @@ Create the main layout for the PDF:
 
 @foreach($pages as $page)
     @if(($page['template'] ?? '') === 'generic')
-        @include('photobook.generic', ['slots' => $page['slots'], 'items' => $page['items'], 'asset_url' => $asset_url])
+        @include('photobook.generic', [
+            'slots' => $page['slots'],
+            'items' => $page['items'],
+            'asset_url' => $asset_url,
+            'gapMm' => $gapMmStr,
+            'gapHalfMm' => $gapHalfMmStr,
+        ])
     @else
-        @include('photobook.page-' . $page['template'], ['photos' => $page['photos']])
+        @include('photobook.page-' . $page['template'], [
+            'photos' => $page['photos'],
+            'gapMm' => $gapMmStr,
+            'gapHalfMm' => $gapHalfMmStr,
+        ])
     @endif
 @endforeach
 
