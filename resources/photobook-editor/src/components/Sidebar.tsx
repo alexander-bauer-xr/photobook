@@ -6,9 +6,15 @@ import React from 'react';
 import { useSelection } from '../state/selection';
 import { useTemplates } from '../hooks/useTemplates';
 import type { LayoutTemplate } from '../api/types';
-type Props = { page: any; onSwap: (a:number,b:number)=>void; onReplace:(i:number)=>void; onTemplateChange:(id:string)=>void };
+type Props = {
+  page: any;
+  onSwap: (a:number,b:number)=>void;
+  onReplace:(i:number)=>void;
+  onTemplateChange:(id:string)=>void;
+  onUpdateItem: (idx:number, changes:Record<string, any>) => void;
+};
 
-export default function Sidebar({ page, onSwap, onReplace, onTemplateChange }: Props) {
+export default function Sidebar({ page, onSwap, onReplace, onTemplateChange, onUpdateItem }: Props) {
   const { setSelected } = useSelection();
    const templatesQ = useTemplates();
   const templateGroups = React.useMemo(() => {
@@ -64,17 +70,26 @@ export default function Sidebar({ page, onSwap, onReplace, onTemplateChange }: P
         <div className="text-sm font-medium">Items</div>
         <ul className="mt-2 flex flex-col gap-2">
           {page.items.map((it: any, i: number)=>(
-            <li key={i} className="flex items-center gap-2">
-              <div className="w-12 h-10 bg-neutral-100 rounded overflow-hidden">
-                {(() => { const u = (it as any).webSrc || (it as any).web || it.src; return u ? <img src={u} alt="thumb" className="w-full h-full object-cover"/> : null; })()}
+            <li key={i} className="flex flex-col gap-2 p-2 border border-neutral-200 rounded">
+              <div className="flex items-center gap-2">
+                <div className="w-12 h-10 bg-neutral-100 rounded overflow-hidden">
+                  {(() => { const u = (it as any).webSrc || (it as any).web || it.src; return u ? <img src={u} alt="thumb" className="w-full h-full object-cover"/> : null; })()}
+                </div>
+                <div className="text-xs flex-1">
+                  <div>slot {it.slotIndex}</div>
+                  <div className="text-neutral-500">{it.photo?.filename || '—'}</div>
+                </div>
+                <button className="text-xs px-2 py-1 bg-neutral-200 rounded" onClick={()=>{ setSelected(`${page.n}:${i}`); onReplace(i); }}>Replace</button>
+                {i>0 && <button className="text-xs px-2 py-1 bg-neutral-800 text-white rounded" onClick={()=>onSwap(i,i-1)}>↑</button>}
+                {i<page.items.length-1 && <button className="text-xs px-2 py-1 bg-neutral-800 text-white rounded" onClick={()=>onSwap(i,i+1)}>↓</button>}
               </div>
-              <div className="text-xs flex-1">
-                <div>slot {it.slotIndex}</div>
-                <div className="text-neutral-500">{it.photo?.filename || '—'}</div>
-              </div>
-              <button className="text-xs px-2 py-1 bg-neutral-200 rounded" onClick={()=>{ setSelected(`${page.n}:${i}`); onReplace(i); }}>Replace</button>
-              {i>0 && <button className="text-xs px-2 py-1 bg-neutral-800 text-white rounded" onClick={()=>onSwap(i,i-1)}>↑</button>}
-              {i<page.items.length-1 && <button className="text-xs px-2 py-1 bg-neutral-800 text-white rounded" onClick={()=>onSwap(i,i+1)}>↓</button>}
+              <input
+                type="text"
+                value={typeof it.caption === 'string' ? it.caption : ''}
+                onChange={(e) => onUpdateItem(i, { caption: e.target.value })}
+                className="w-full border border-neutral-200 rounded px-2 py-1 text-xs"
+                placeholder="Caption (emoji ok)"
+              />
             </li>
           ))}
         </ul>

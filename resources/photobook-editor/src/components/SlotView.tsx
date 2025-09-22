@@ -24,6 +24,7 @@ export type Item = {
   _iw?: number;
   _ih?: number;
   _error?: boolean;
+  caption?: string;
 };
 
 export type SlotSnapshot = {
@@ -87,6 +88,13 @@ export default function SlotView({
 
   const src = getSrc(item);
   const loaded = iw > 0 && ih > 0;
+  const captionRaw =
+    typeof item.caption === 'string'
+      ? item.caption
+      : typeof (item as any).caption === 'number'
+        ? String((item as any).caption)
+        : '';
+  const hasCaption = captionRaw.trim().length > 0;
 
   return (
     <div
@@ -230,6 +238,30 @@ export default function SlotView({
         ) : (
           <div className="w-full h-full grid place-items-center bg-neutral-100 text-neutral-500 text-xs">
             {item._error ? 'Bild konnte nicht geladen werden' : 'Kein Bild'}
+          </div>
+        )}
+        {hasCaption && (
+          <div
+            style={{
+              position: 'absolute',
+              left: innerPad + 6,
+              right: innerPad + 6,
+              bottom: innerPad + 6,
+              background: 'rgba(255,255,255,0.92)',
+              color: '#1f2937',
+              fontSize: '11px',
+              lineHeight: 1.3,
+              padding: '6px 8px',
+              borderRadius: '6px',
+              textAlign: 'center',
+              wordBreak: 'break-word',
+              whiteSpace: 'pre-wrap',
+              pointerEvents: 'none',
+              boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
+              zIndex: 3,
+            }}
+          >
+            {captionRaw}
           </div>
         )}
       </div>
