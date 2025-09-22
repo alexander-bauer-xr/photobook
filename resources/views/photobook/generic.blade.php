@@ -43,6 +43,14 @@
           }
           $transform = is_array($it['transform'] ?? null) ? $it['transform'] : null;
           $hasTransform = $transform && ($transform['imgWidth'] ?? 0) > 0 && ($transform['imgHeight'] ?? 0) > 0 && $src;
+          $captionRaw = '';
+          if (array_key_exists('caption', $it)) {
+            $val = $it['caption'];
+            if (is_string($val) || is_numeric($val)) {
+              $captionRaw = (string) $val;
+            }
+          }
+          $caption = trim($captionRaw) !== '' ? $captionRaw : '';
         @endphp
 
         @if($hasTransform)
@@ -79,8 +87,8 @@
                style="background-image:url('{{ e($src) }}'); background-position: {{ $pos }}; background-size: {{ $fitMode }};">
           </div>
         @endif
-        @if(!empty($it['caption']))
-          <div class="caption">{{ $it['caption'] }}</div>
+        @if($caption !== '')
+          <div class="caption">{{ $caption }}</div>
         @endif
       </div>
     @endforeach
