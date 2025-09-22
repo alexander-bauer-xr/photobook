@@ -406,17 +406,27 @@ class PhotoBookBuilder
                 $fpPath = is_array($firstPhoto) ? ($firstPhoto['path'] ?? null) : (is_object($firstPhoto) ? ($firstPhoto->path ?? null) : null);
                 if ($fpPath) {
                     $fpFilename = is_array($firstPhoto) ? ($firstPhoto['filename'] ?? basename($fpPath)) : ($firstPhoto->filename ?? basename($fpPath));
-                    $ext = strtolower(pathinfo($fpFilename ?: basename($fpPath), PATHINFO_EXTENSION) ?: 'jpg');
-                    $fname = sha1($fpPath) . ($ext ? ('.' . $ext) : '');
-                    $rel = 'images/' . $fname;
-                    if ($ensureRelAndSrc($rel)) {
-                        $has = true;
-                        if (!$coverOrigPhoto) {
-                            $coverOrigPhoto = (object) [
-                                'path' => $fpPath,
-                                'filename' => $fpFilename,
-                            ];
+                    $cached = $map[$fpPath] ?? null;
+                    if ($cached && is_file($cached)) {
+                        $file = realpath($cached) ?: $cached;
+                        $rel = 'images/' . basename($file);
+                        if ($ensureRelAndSrc($rel)) {
+                            $has = true;
                         }
+                    }
+                    if (!$has) {
+                        $ext = strtolower(pathinfo($fpFilename ?: basename($fpPath), PATHINFO_EXTENSION) ?: 'jpg');
+                        $fname = sha1($fpPath) . ($ext ? ('.' . $ext) : '');
+                        $rel = 'images/' . $fname;
+                        if ($ensureRelAndSrc($rel)) {
+                            $has = true;
+                        }
+                    }
+                    if ($has && !$coverOrigPhoto) {
+                        $coverOrigPhoto = (object) [
+                            'path' => $fpPath,
+                            'filename' => $fpFilename,
+                        ];
                     }
                 }
             }
