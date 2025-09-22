@@ -87,4 +87,14 @@ export const api = {
       }),
     );
   },
+  async submitFeedback(payload: { folder?: string; page: number; action: string; reason?: string | null }) {
+    return okJson<{ ok: boolean }>(
+      await fetch('/photobook/feedback', {
+        method: 'POST',
+        headers: { ...commonHeaders(), 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload),
+      }),
+    );
+  },
 };
