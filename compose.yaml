@@ -4,7 +4,7 @@ services:
     working_dir: /workspace
     volumes:
       - ./:/workspace:cached
-    command: bash -lc "bash .devcontainer/postCreate.sh && npm run dev:all"
+    command: bash -lc "bash .devcontainer/ensure-node.sh && bash .devcontainer/postCreate.sh && npm run dev:all"
     ports:
       - "8000:8000"
       - "5173:5173"

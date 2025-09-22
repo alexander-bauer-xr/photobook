@@ -27,6 +27,16 @@ class PhotobookApiController extends Controller
 
     private function normalizeAssetUrl(string $hash, $value): ?string
     {
+        $relative = $this->extractRelativeAssetPath($hash, $value);
+        if ($relative) {
+            return route('photobook.asset', ['hash' => $hash, 'path' => $relative], false);
+        }
+
+        return null;
+    }
+
+    private function extractRelativeAssetPath(string $hash, $value): ?string
+    {
         if (!is_string($value) || $value === '') {
             return null;
         }
@@ -46,21 +56,39 @@ class PhotobookApiController extends Controller
             }
 
             $trimmed = preg_split('/[?#]/', $path, 2)[0] ?? $path;
-            $withLeadingSlash = $trimmed !== '' && $trimmed[0] !== '/' ? '/' . $trimmed : $trimmed;
+            if ($trimmed === '') {
+                continue;
+            }
 
-            if ($withLeadingSlash !== '' && preg_match('#/photobook/asset/' . preg_quote($hash, '#') . '/(.+)$#', $withLeadingSlash, $m)) {
-                $rel = ltrim($m[1], '/');
-                if ($rel !== '') {
-                    return route('photobook.asset', ['hash' => $hash, 'path' => $rel], false);
+            $candidates = [$trimmed];
+            if ($trimmed[0] !== '/') {
+                $candidates[] = '/' . $trimmed;
+            }
+
+            foreach ($candidates as $candidatePath) {
+                if ($candidatePath !== '' && preg_match('#/photobook/asset/' . preg_quote($hash, '#') . '/(.+)$#', $candidatePath, $m)) {
+                    $rel = ltrim($m[1], '/');
+                    if ($rel !== '') {
+                        return $rel;
+                    }
                 }
             }
 
-            $needle = '/_cache/' . $hash . '/';
-            $pos = strpos($trimmed, $needle);
-            if ($pos !== false) {
-                $rel = ltrim(substr($trimmed, $pos + strlen($needle)), '/');
+            foreach ($candidates as $candidatePath) {
+                $needle = '/_cache/' . $hash . '/';
+                $pos = strpos($candidatePath, $needle);
+                if ($pos !== false) {
+                    $rel = ltrim(substr($candidatePath, $pos + strlen($needle)), '/');
+                    if ($rel !== '') {
+                        return $rel;
+                    }
+                }
+            }
+
+            if ($trimmed[0] !== '/' && !preg_match('#^[a-zA-Z]:/#', $trimmed) && strpos($trimmed, '://') === false) {
+                $rel = ltrim($trimmed, '/');
                 if ($rel !== '') {
-                    return route('photobook.asset', ['hash' => $hash, 'path' => $rel], false);
+                    return $rel;
                 }
             }
         }
@@ -167,8 +195,21 @@ class PhotobookApiController extends Controller
                         $coverItem = $coverOv['items'][0] ?? null;
                         if (is_array($coverItem)) {
                             // Update cover data from overrides
+                            $existingCoverImage = $data['cover']['image'] ?? null;
+                            if (is_string($existingCoverImage) && $existingCoverImage !== '') {
+                                $normalizedExisting = $this->extractRelativeAssetPath($hash, $existingCoverImage);
+                                if ($normalizedExisting) {
+                                    $data['cover']['image'] = $normalizedExisting;
+                                }
+                            }
                             if (!empty($coverItem['photo']['path'])) {
-                                $data['cover']['image'] = $coverItem['photo']['path'];
+                                $coverPhotoPath = (string) $coverItem['photo']['path'];
+                                $normalizedPhoto = $this->extractRelativeAssetPath($hash, $coverPhotoPath);
+                                if ($normalizedPhoto) {
+                                    $data['cover']['image'] = $normalizedPhoto;
+                                } else {
+                                    $data['cover']['sourcePath'] = $coverPhotoPath;
+                                }
                             }
                             // Add positioning and transformation properties (legacy and canonical)
                             foreach (['objectPosition', 'scale', 'rotate'] as $prop) {
@@ -182,6 +223,16 @@ class PhotobookApiController extends Controller
                                 }
                             }
                             // Add webSrc for cover if we have a path
+                            if (!empty($coverItem['src'])) {
+                                $normalizedFromSrc = $this->extractRelativeAssetPath($hash, $coverItem['src']);
+                                if ($normalizedFromSrc) {
+                                    $data['cover']['image'] = $normalizedFromSrc;
+                                }
+                                $coverWeb = $this->normalizeAssetUrl($hash, $coverItem['src']);
+                                if ($coverWeb) {
+                                    $data['cover']['webSrc'] = $coverWeb;
+                                }
+                            }
                             if (!empty($data['cover']['image'])) {
                                 $coverWeb = $this->normalizeAssetUrl($hash, $data['cover']['image']);
                                 if ($coverWeb) {
