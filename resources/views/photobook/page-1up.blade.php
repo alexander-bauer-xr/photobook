@@ -1,6 +1,15 @@
+@php
+  if (!isset($gapHalfMm)) {
+      $formatMm = static function (float $value): string {
+          $formatted = number_format($value, 6, '.', '');
+          return rtrim(rtrim($formatted, '0'), '.');
+      };
+      $gapHalfMm = $formatMm(((float) config('photobook.page_gap_mm', 2.5)) / 2);
+  }
+@endphp
 <div class="page">
   <div class="page-inner">
-    <div class="slot" style="left:0; top:0; width:calc(100% - var(--eps-mm)); height:calc(100% - var(--eps-mm)); padding: calc(var(--gap-mm)/2);">
+    <div class="slot" style="left:0; top:0; width:calc(100% - var(--eps-mm)); height:calc(100% - var(--eps-mm)); padding: {{ $gapHalfMm }}mm;">
       @php
         $src = $asset_url($photos[0]);
         $p = $photos[0] ?? null;
