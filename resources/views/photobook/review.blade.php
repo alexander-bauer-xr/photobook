@@ -45,6 +45,23 @@
             box-sizing: border-box;
         }
 
+        .thumb-caption {
+            position: absolute;
+            left: 6px;
+            right: 6px;
+            bottom: 6px;
+            padding: 6px 8px;
+            background: rgba(255, 255, 255, 0.9);
+            color: #1f2937;
+            font-size: 12px;
+            line-height: 1.3;
+            text-align: center;
+            border-radius: 6px;
+            word-break: break-word;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+            pointer-events: none;
+        }
+
         .thumb-inner {
             position: absolute;
             inset: 0;
@@ -183,6 +200,9 @@
                 $slotW = $hasTransform ? max(0.0, (float) ($transform['slotWidth'] ?? 0)) : 0.0;
                 $slotH = $hasTransform ? max(0.0, (float) ($transform['slotHeight'] ?? 0)) : 0.0;
                 $aspectPct = ($slotW > 0 && $slotH > 0) ? ($slotH / $slotW * 100.0) : 66.0;
+                $captionRaw = $it['caption'] ?? null;
+                $captionText = is_string($captionRaw) ? $captionRaw : (is_numeric($captionRaw) ? (string) $captionRaw : '');
+                $captionDisplay = trim((string) $captionText) !== '' ? $captionText : '';
             @endphp
             <div class="thumb" style="padding-top: {{ $formatNumber($aspectPct, 4) }}%;">
                 @if($hasTransform)
@@ -216,6 +236,9 @@
                         $fitMode = (($it['fit'] ?? ($it['crop'] ?? 'cover')) === 'contain') ? 'contain' : 'cover';
                     @endphp
                     <div class="thumb-fallback" style="background-image:url('{{ e($src) }}'); background-position: {{ $pos }}; background-size: {{ $fitMode }};"></div>
+                @endif
+                @if($captionDisplay !== '')
+                    <div class="thumb-caption">{{ $captionDisplay }}</div>
                 @endif
             </div>
             @endforeach

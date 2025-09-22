@@ -94,6 +94,9 @@ type AnyItem = {
   scale?: number;
   rotate?: number;
 
+  // Metadata
+  caption?: string;
+
   // Runtime
   _iw?: number; _ih?: number; // natural size
   _error?: boolean;           // load error
@@ -166,7 +169,10 @@ function normalizeItem(it: AnyItem): AnyItem {
     // Rotation: prefer canonical, else legacy rotate
     rotation: Number.isFinite(it.rotation) ? (it.rotation as number) % 360
             : (Number.isFinite(it.rotate) ? (Number(it.rotate) % 360) : 0),
-    auto: it.auto === true ? true : false
+    auto: it.auto === true ? true : false,
+    caption: typeof it.caption === 'string'
+      ? it.caption
+      : (typeof (it as any).caption === 'number' ? String((it as any).caption) : undefined),
   };
 }
 
@@ -198,12 +204,19 @@ function buildOverridesPayload(
       const offset = { x: Number(it.offset?.x) || 0, y: Number(it.offset?.y) || 0 };
       const zoom = isFinitePos(it.zoom) ? Number(it.zoom) : 1;
       const rotation = Number.isFinite(Number(it.rotation)) ? ((Number(it.rotation) % 360) + 360) % 360 : 0;
+      const caption =
+        typeof it.caption === 'string'
+          ? it.caption
+          : typeof (it as any).caption === 'number'
+            ? String((it as any).caption)
+            : undefined;
 
       const canon = {
         slotIndex: it.slotIndex,
         fit, align, offset, zoom, rotation,
         auto: it.auto === true,
         ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {}),
+        ...(caption !== undefined ? { caption } : {}),
       };
 
       const legacy = {

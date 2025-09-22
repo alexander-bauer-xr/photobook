@@ -179,6 +179,12 @@ function Root() {
           ? Number(it.rotation)
           : (Number.isFinite(Number(it.rotate)) ? Number(it.rotate) : 0);
         const auto = !!it.auto;
+        const caption =
+          typeof it.caption === 'string'
+            ? it.caption
+            : typeof it.caption === 'number'
+              ? String(it.caption)
+              : undefined;
 
         // legacy (keep for back-compat)
         const objectPosition = `${Math.round(50 + align.x * 50)}% ${Math.round(50 + align.y * 50)}%`;
@@ -190,6 +196,7 @@ function Root() {
           fit, align, offset, zoom, rotation, auto,
           ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {}),
           ...(it.src ? { src: it.src } : {}),
+          ...(caption !== undefined ? { caption } : {}),
 
           // --- legacy ---
           crop: fit,
@@ -458,6 +465,12 @@ function Root() {
                     const zoom = isPos(it.zoom) ? Number(it.zoom) : 1;
                     const rotation = Number.isFinite(Number(it.rotation)) ? Number(it.rotation) : 0;
                     const objectPosition = `${Math.round(50 + align.x * 50)}% ${Math.round(50 + align.y * 50)}%`;
+                    const caption =
+                      typeof it.caption === 'string'
+                        ? it.caption
+                        : typeof it.caption === 'number'
+                          ? String(it.caption)
+                          : undefined;
 
                     return {
                       slotIndex: it.slotIndex,
@@ -466,6 +479,7 @@ function Root() {
                       fit, align, offset, zoom, rotation, auto: !!it.auto,
                       ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {}),
                       ...(it.src ? { src: it.src } : {}),
+                      ...(caption !== undefined ? { caption } : {}),
 
                       // legacy
                       crop: fit,
@@ -481,7 +495,13 @@ function Root() {
 
             />
           </div>
-          <Sidebar page={page} onSwap={swapItems} onReplace={openReplace} onTemplateChange={async (tpl) => {
+          <Sidebar page={page} onSwap={swapItems} onReplace={openReplace} onUpdateItem={(idx, changes) => {
+            if (!page) return;
+            const existing = page.items?.[idx];
+            if (!existing) return;
+            page.items[idx] = { ...existing, ...changes };
+            setPageVersion(v => v + 1);
+          }} onTemplateChange={async (tpl) => {
             if (!page) return;
             if (pageIdx === 0) return; // no template selection for cover
             // Apply slots from selected template immediately in UI

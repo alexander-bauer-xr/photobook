@@ -877,6 +877,7 @@ class PhotoBookBuilder
                         // --- legacy (kept for compatibility)
                         'crop' => $it['crop'] ?? (($it['fit'] ?? 'cover') === 'contain' ? 'contain' : 'cover'),
                         'objectPosition' => $it['objectPosition'] ?? '50% 50%',
+                        'caption' => array_key_exists('caption', $it) ? $it['caption'] : null,
 
                         // --- canonical (UI + Python use these)
                         'fit' => $it['fit'] ?? 'cover',
