@@ -19,11 +19,13 @@ return [
         'max_long_edge_px' => env('PHOTOBOOK_OPTIMIZE_MAX_EDGE', null),
 
         // Convert to JPEG whenever possible (opaque PNG, HEIC, etc.)
-        'convert_to_jpeg' => (bool) env('PHOTOBOOK_OPTIMIZE_TO_JPEG', true),
+    'convert_to_jpeg' => (bool) env('PHOTOBOOK_OPTIMIZE_TO_JPEG', true),
 
-        // JPEG encode controls
-        'jpeg_quality'      => (int) env('PHOTOBOOK_JPEG_QUALITY', 72), // 60–80 is a good range
-        'progressive_jpeg'  => (bool) env('PHOTOBOOK_PROGRESSIVE_JPEG', true),
+    // JPEG encode controls
+    'jpeg_quality'      => (int) env('PHOTOBOOK_JPEG_QUALITY', 88), // 80–92 keeps detail crisp
+    'render_jpeg_quality' => env('PHOTOBOOK_RENDER_JPEG_QUALITY'),   // null => derive from jpeg_quality
+    'progressive_jpeg'  => (bool) env('PHOTOBOOK_PROGRESSIVE_JPEG', true),
+    'png_compression'   => env('PHOTOBOOK_PNG_COMPRESSION', 3),
 
         // If source has alpha (PNG), flatten onto white for smaller JPEGs
         'flatten_png_to_white' => (bool) env('PHOTOBOOK_FLATTEN_PNG', true),
@@ -32,16 +34,29 @@ return [
         'strip_metadata' => (bool) env('PHOTOBOOK_STRIP_METADATA', true),
 
         // Separate "target dpi" used to compute slot pixel sizes (not Dompdf's dpi)
-        'target_dpi' => (int) env('PHOTOBOOK_TARGET_DPI', 160), // 144–180 keeps PDFs small & crisp
+    'target_dpi' => (int) env('PHOTOBOOK_TARGET_DPI', 200), // 180–220 keeps PDFs detailed
 
         // Give a little headroom for object-fit: cover crops
-        'safety_scale' => (float) env('PHOTOBOOK_SAFETY_SCALE', 1.15),
+    'safety_scale' => (float) env('PHOTOBOOK_SAFETY_SCALE', 1.2),
     ],
 
     // Normalize images before embedding
     'normalize' => [
         // Apply EXIF-based orientation fix (rotate/flip) to JPEGs
         'exif_orientation' => (bool) env('PHOTOBOOK_EXIF_ORIENTATION', true),
+    ],
+
+    'pdf' => [
+        'font_dir' => env('PHOTOBOOK_PDF_FONT_DIR', storage_path('app/fonts')),
+        'default_font' => env('PHOTOBOOK_PDF_DEFAULT_FONT', 'Inter'),
+        'font_families' => [
+            'Inter' => [
+                'normal' => env('PHOTOBOOK_PDF_FONT_INTER_REGULAR', 'Inter-Regular.ttf'),
+                'bold' => env('PHOTOBOOK_PDF_FONT_INTER_BOLD', 'Inter-Bold.ttf'),
+                'italic' => env('PHOTOBOOK_PDF_FONT_INTER_ITALIC', 'Inter-Italic.ttf'),
+                'bold_italic' => env('PHOTOBOOK_PDF_FONT_INTER_BOLDITALIC', 'Inter-BoldItalic.ttf'),
+            ],
+        ],
     ],
 
     'cover' => [

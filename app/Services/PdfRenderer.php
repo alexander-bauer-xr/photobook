@@ -4,7 +4,9 @@ namespace App\Services;
 
 use Dompdf\Dompdf;
 use Dompdf\Options;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+
 
 /**
  * Copilot prompt:
@@ -24,21 +26,28 @@ class PdfRenderer
     // Reduce size: subset fonts and respect image DPI
     $opts->set('isFontSubsettingEnabled', true);
     $opts->set('enable_html5_parser', true);
+    $fontDir = PdfFontManager::prepareFontDirectory();
+    $opts->setFontDir($fontDir);
+    $opts->setFontCache($fontDir);
+    if ($defaultFont = (string) config('photobook.pdf.default_font', 'Inter')) {
+        $opts->set('defaultFont', $defaultFont);
+    }
     // Restrict Dompdf to storage/app so file:// paths are accessible
     $opts->setChroot(storage_path('app'));
 
-        $dompdf = new Dompdf($opts);
+    $dompdf = new Dompdf($opts);
+    PdfFontManager::registerFonts($dompdf);
     $dompdf->loadHtml($html);
-        $dompdf->setPaper($paper, $orientation);
-    \Log::info('PDF: starting render', ['paper' => $paper, 'orientation' => $orientation, 'dpi' => $dpi, 'html_kb' => round(strlen($html)/1024,1)]);
+    $dompdf->setPaper($paper, $orientation);
+    Log::info('PDF: starting render', ['paper' => $paper, 'orientation' => $orientation, 'dpi' => $dpi, 'html_kb' => round(strlen($html)/1024,1)]);
     $dompdf->render();
-    \Log::info('PDF: render finished', ['secs' => round(microtime(true) - $t0, 2), 'mem_mb' => round(memory_get_peak_usage(true)/1048576,1)]);
+    Log::info('PDF: render finished', ['secs' => round(microtime(true) - $t0, 2), 'mem_mb' => round(memory_get_peak_usage(true)/1048576,1)]);
 
-        if (!str_starts_with($fullPath, '/')) {
-            $disk = Storage::disk('pdf_exports');
-            $disk->put($fullPath, $dompdf->output());
-        } else {
-            file_put_contents($fullPath, $dompdf->output());
-        }
+    if (!str_starts_with($fullPath, '/')) {
+        $disk = Storage::disk('pdf_exports');
+        $disk->put($fullPath, $dompdf->output());
+    } else {
+        file_put_contents($fullPath, $dompdf->output());
+    }
     }
 }

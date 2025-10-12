@@ -51,6 +51,11 @@ export default function SlotView({
   onSelect,
   onUpdateItem,
   onCommit,
+  variant = 'default',
+  coverOverlayTitle,
+  coverHasPhoto,
+  coverPlaceholderText = 'No cover photo selected',
+  coverBackground = '#111827',
 }: {
   pageNumber: number;
   idx: number;
@@ -61,9 +66,18 @@ export default function SlotView({
   onSelect: (idx: number) => void;
   onUpdateItem: (updater: (prev: Item) => Item) => void;
   onCommit: () => void;
+  variant?: 'default' | 'cover';
+  coverOverlayTitle?: string | null;
+  coverHasPhoto?: boolean | null;
+  coverPlaceholderText?: string;
+  coverBackground?: string;
 }) {
   const { slotLeft, slotTop, slotW, slotH, contentW, contentH, innerPad } =
     snapshot;
+  const isCover = variant === 'cover';
+  const ringClass = isCover
+    ? (selected ? 'ring-2 ring-blue-500' : 'ring-0')
+    : (selected ? 'ring-2 ring-blue-500' : 'ring-1 ring-neutral-200');
 
   // Size & math
   const iw = item._iw || 0,
@@ -98,7 +112,7 @@ export default function SlotView({
 
   return (
     <div
-      className={selected ? 'ring-2 ring-blue-500' : 'ring-1 ring-neutral-200'}
+      className={ringClass}
       style={{
         position: 'absolute',
         left: `${slotLeft}px`,
@@ -123,7 +137,7 @@ export default function SlotView({
           bottom: innerPad,
           boxSizing: 'border-box',
           overflow: 'hidden',
-          background: '#fff',
+          background: isCover ? coverBackground : '#fff',
         }}
       >
         {src && !item._error ? (
@@ -236,8 +250,38 @@ export default function SlotView({
             title="Drag = verschieben · Mausrad/Ctrl+Wheel = Zoom · R/Shift+R = rotieren · F = fit"
           />
         ) : (
-          <div className="w-full h-full grid place-items-center bg-neutral-100 text-neutral-500 text-xs">
-            {item._error ? 'Bild konnte nicht geladen werden' : 'Kein Bild'}
+          <div
+            className={`w-full h-full grid place-items-center ${isCover ? 'text-[18px] font-medium uppercase tracking-[0.08em]' : 'bg-neutral-100 text-neutral-500 text-xs'}`}
+            style={{
+              background: isCover ? 'transparent' : undefined,
+              color: isCover ? '#f9fafb' : undefined,
+              textAlign: 'center',
+              padding: '0 12px',
+            }}
+          >
+            {item._error
+              ? 'Bild konnte nicht geladen werden'
+              : (isCover ? coverPlaceholderText : 'Kein Bild')}
+          </div>
+        )}
+        {isCover && coverOverlayTitle && (typeof coverHasPhoto === 'boolean' ? coverHasPhoto : !!src) && (
+          <div
+            style={{
+              position: 'absolute',
+              left: '7%',
+              bottom: '12%',
+              padding: '8px 18px',
+              color: '#f9fafb',
+              fontSize: '34px',
+              fontWeight: 600,
+              letterSpacing: '0.02em',
+              textShadow: '0 4px 16px rgba(0, 0, 0, 0.45)',
+              pointerEvents: 'none',
+              maxWidth: '80%',
+              lineHeight: 1.15,
+            }}
+          >
+            {coverOverlayTitle}
           </div>
         )}
         {hasCaption && (

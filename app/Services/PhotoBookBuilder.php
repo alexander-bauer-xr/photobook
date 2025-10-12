@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Services;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 /**
@@ -17,7 +18,7 @@ class PhotoBookBuilder
         if (function_exists('set_time_limit'))
             @set_time_limit(0);
         $t0 = microtime(true);
-        \Log::info('Builder: start', [
+    Log::info('Builder: start', [
             'pages' => count($pages),
             'mem_mb' => round(memory_get_usage(true) / 1048576, 1),
         ]);
@@ -26,7 +27,7 @@ class PhotoBookBuilder
         $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
         if (!empty($options['force_refresh'])) {
             $this->rrmdir($cacheRoot);
-            \Log::info('Builder: cache invalidated', ['folder' => $folder]);
+            Log::info('Builder: cache invalidated', ['folder' => $folder]);
         }
         $imagesDir = $cacheRoot . DIRECTORY_SEPARATOR . 'images';
         if (!is_dir($imagesDir)) {
@@ -70,6 +71,21 @@ class PhotoBookBuilder
             }
         }
 
+        $coverOrigPhoto = null;
+        if (!empty($options['cover_source_path']) && is_string($options['cover_source_path'])) {
+            $coverPath = (string) $options['cover_source_path'];
+            if (!isset($unique[$coverPath])) {
+                $unique[$coverPath] = (object) [
+                    'path' => $coverPath,
+                    'filename' => basename($coverPath),
+                ];
+            }
+            $coverOrigPhoto = (object) [
+                'path' => $coverPath,
+                'filename' => basename($coverPath),
+            ];
+        }
+
         $ovPages = [];
         try {
             $ovFile = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.json';
@@ -78,11 +94,10 @@ class PhotoBookBuilder
                 $ovPages = is_array($ov['pages'] ?? null) ? $ov['pages'] : [];
             }
         } catch (\Throwable $e) {
-            \Log::debug('Builder: overrides read failed', ['err' => $e->getMessage()]);
+            Log::debug('Builder: overrides read failed', ['err' => $e->getMessage()]);
         }
 
         // Track original cover photo (if known) for export and ensure it is cached too
-        $coverOrigPhoto = null;
         try {
             $folder = $options['folder'] ?? config('photobook.folder');
             $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
@@ -130,7 +145,7 @@ class PhotoBookBuilder
                     foreach ($manifest['map'] as $p => $fname) {
                         $map[$p] = $imagesDir . DIRECTORY_SEPARATOR . $fname;
                     }
-                    \Log::info('Builder: cache reuse', ['folder' => $folder, 'count' => count($map)]);
+                    Log::info('Builder: cache reuse', ['folder' => $folder, 'count' => count($map)]);
                 }
             }
         }
@@ -189,7 +204,10 @@ class PhotoBookBuilder
                     $opt = config('photobook.optimize', []);
                     $doResize = !empty($opt['resize']);
                     $toJpeg = !empty($opt['convert_to_jpeg']);
-                    $jpegQ = (int) ($opt['jpeg_quality'] ?? 75);
+                    $jpegQ = (int) ($opt['jpeg_quality'] ?? 88);
+                    $jpegQ = max(60, min(96, $jpegQ));
+                    $pngCompression = (int) ($opt['png_compression'] ?? 3);
+                    $pngCompression = max(0, min(9, $pngCompression));
 
                     $finalPath = $target;
                     $imgData = $buf;
@@ -223,34 +241,45 @@ class PhotoBookBuilder
                                 $src = @imagecreatefromstring($imgData);
                                 if ($src && $tw > 0 && $th > 0) {
                                     $dst = @imagecreatetruecolor($tw, $th);
+                                    $srcExtLower = strtolower($srcExt);
+                                    $encodeAsJpeg = $toJpeg;
+                                    if (!$encodeAsJpeg) {
+                                        $encodeAsJpeg = !in_array($srcExtLower, ['jpg', 'jpeg', 'png']);
+                                    }
+                                    if ($encodeAsJpeg) {
+                                        if ($srcExtLower === 'png' && !empty($opt['flatten_png_to_white'])) {
+                                            $white = imagecolorallocate($dst, 255, 255, 255);
+                                            imagefill($dst, 0, 0, $white);
+                                        }
+                                    } else {
+                                        imagealphablending($dst, false);
+                                        $transparent = imagecolorallocatealpha($dst, 0, 0, 0, 127);
+                                        imagefill($dst, 0, 0, $transparent);
+                                        imagesavealpha($dst, true);
+                                    }
                                     @imagecopyresampled($dst, $src, 0, 0, 0, 0, $tw, $th, $w, $h);
-                                    // (rest of your JPEG/PNG writing stays the same)
-                                    $encodeAsJpeg = $toJpeg || in_array($srcExt, ['heic', 'heif', 'webp', 'bmp', 'tiff', 'tif', 'png', 'gif']);
                                     if ($encodeAsJpeg) {
                                         $finalPath = preg_replace('/\.[a-z0-9]+$/i', '', $target) . '.jpg';
-                                        @imagejpeg($dst, $finalPath, max(40, min(95, $jpegQ)));
+                                        if (!empty($opt['progressive_jpeg'])) {
+                                            @imageinterlace($dst, 1);
+                                        }
+                                        @imagejpeg($dst, $finalPath, $jpegQ);
                                     } else {
-                                        // keep original extension
-                                        if ($srcExt === 'png') {
-                                            @imagesavealpha($dst, true);
-                                            // PNG compression: 0 (no) - 9 (max). Map jpegQ 40..95 -> 6..1
-                                            $level = (int) max(1, min(9, round((100 - max(40, min(95, $jpegQ))) / 10)));
-                                            @imagepng($dst, $target, $level);
+                                        if ($srcExtLower === 'png') {
+                                            @imagepng($dst, $target, $pngCompression);
+                                            $finalPath = $target;
                                         } else {
-                                            @imagejpeg($dst, $target, max(40, min(95, $jpegQ)));
+                                            @imagejpeg($dst, $target, $jpegQ);
+                                            $finalPath = $target;
                                         }
                                     }
                                     if (is_file($finalPath)) {
                                         $map[$path] = $finalPath;
                                         $copied++;
                                     }
-                                    if (is_resource($dst)) {
-                                        @imagedestroy($dst);
-                                    }
+                                    $this->destroyImage($dst);
                                 }
-                                if (is_resource($src)) {
-                                    @imagedestroy($src);
-                                }
+                                $this->destroyImage($src);
                             }
                         } catch (\Throwable $e) {
                             // fallback: write original bytes
@@ -269,12 +298,12 @@ class PhotoBookBuilder
                         }
                     }
                     if ($idx % 25 === 0) {
-                        \Log::debug('Builder: copy progress', ['idx' => $idx, 'of' => $total, 'copied' => $copied, 'reused' => $reused, 'skipped' => $skipped, 'mem_mb' => round(memory_get_usage(true) / 1048576, 1)]);
+                        Log::debug('Builder: copy progress', ['idx' => $idx, 'of' => $total, 'copied' => $copied, 'reused' => $reused, 'skipped' => $skipped, 'mem_mb' => round(memory_get_usage(true) / 1048576, 1)]);
                     }
                 } catch (\Throwable $e) {
                     $errors++;
                     if ($idx % 10 === 0) {
-                        \Log::debug('Builder: copy error', ['path' => $path, 'err' => $e->getMessage()]);
+                        Log::debug('Builder: copy error', ['path' => $path, 'err' => $e->getMessage()]);
                     }
                 }
             }
@@ -286,7 +315,7 @@ class PhotoBookBuilder
                 'created_at' => date(DATE_ATOM),
             ];
             @file_put_contents($manifestFile, json_encode($manifest, JSON_PRETTY_PRINT));
-            \Log::info('Builder: cache updated', [
+            Log::info('Builder: cache updated', [
                 'unique' => $total,
                 'copied' => $copied,
                 'reused' => $reused,
@@ -307,7 +336,9 @@ class PhotoBookBuilder
                     return false;
                 $options['cover_image'] = $rel;
                 $options['cover_image_src'] = 'file:///' . str_replace('\\', '/', $full);
-                \Log::debug('Builder: cover image resolved', ['rel' => $rel, 'full' => $full]);
+                // Also provide a Dompdf chroot-relative path (storage/app is chroot)
+                $options['cover_image_pdf'] = 'pdf-exports/_cache/' . sha1($folder) . '/' . ltrim($rel, '/');
+                Log::debug('Builder: cover image resolved', ['rel' => $rel, 'full' => $full]);
                 // Also provide an HTTP URL fallback for environments where file:/// is restricted
                 try {
                     $hash = sha1($folder);
@@ -439,10 +470,10 @@ class PhotoBookBuilder
         try {
             if (config('photobook.ml.enable') && (config('photobook.ml.faces') || config('photobook.ml.saliency'))) {
                 $featMap = app(\App\Services\FeatureRepository::class)->getMany(array_keys($unique));
-                \Log::info('Builder: features fetched', ['available' => is_array($featMap) ? count($featMap) : 0]);
+                Log::info('Builder: features fetched', ['available' => is_array($featMap) ? count($featMap) : 0]);
             }
         } catch (\Throwable $e) {
-            \Log::debug('Builder: feature fetch skipped', ['err' => $e->getMessage()]);
+            Log::debug('Builder: feature fetch skipped', ['err' => $e->getMessage()]);
             $featMap = [];
         }
 
@@ -716,7 +747,7 @@ class PhotoBookBuilder
         }
         unset($page);
 
-        \Log::info('Builder: focal source summary', [
+    Log::info('Builder: focal source summary', [
             'faces' => $cntFaces,
             'saliency' => $cntSaliency,
             'fallback' => $cntFallback,
@@ -737,6 +768,13 @@ class PhotoBookBuilder
             return $uri;
         };
 
+        // Ensure title default for PDF metadata and cover rendering
+        if (empty($options['title'])) {
+            $options['title'] = config('photobook.cover.title');
+        }
+
+    $defaultFontFamily = trim((string) config('photobook.pdf.default_font', 'Inter')) ?: 'Inter';
+
         $html = view('photobook.layout', [
             'options' => $options,
             'pages' => $pages,
@@ -748,9 +786,10 @@ class PhotoBookBuilder
                 'paper' => config('photobook.paper'),
                 'dpi' => (int) config('photobook.dpi'),
             ],
+            'fontFamily' => $defaultFontFamily,
         ])->render();
 
-        \Log::debug('Builder: html built', ['kb' => round(strlen($html) / 1024, 1)]);
+    Log::debug('Builder: html built', ['kb' => round(strlen($html) / 1024, 1)]);
 
         // Progress mid-way
         try {
@@ -804,7 +843,7 @@ class PhotoBookBuilder
                 unset($p);
             }
         } catch (\Throwable $e) {
-            \Log::warning('Builder: merge overrides failed', ['err' => $e->getMessage()]);
+            Log::warning('Builder: merge overrides failed', ['err' => $e->getMessage()]);
         }
 
         // Export pages.json for debug/inspection (prepend synthetic page 0 for cover)
@@ -921,14 +960,66 @@ class PhotoBookBuilder
             ];
             // Persist cover info for UI reuse
             if (!empty($options['cover_image'] ?? null) || !empty($options['title'] ?? null)) {
-                $pagesJson['cover'] = [
+                $coverExport = [
                     'image' => (string) ($options['cover_image'] ?? ''),
                     'title' => (string) ($options['title'] ?? ''),
                 ];
+                if (!empty($options['cover_subtitle'] ?? '')) {
+                    $subtitle = (string) $options['cover_subtitle'];
+                    $coverExport['cover_subtitle'] = $subtitle;
+                    $coverExport['subtitle'] = $subtitle;
+                }
+                if (!empty($options['cover_date'] ?? '')) {
+                    $date = (string) $options['cover_date'];
+                    $coverExport['cover_date'] = $date;
+                    $coverExport['date'] = $date;
+                }
+                if (array_key_exists('cover_show_date', $options)) {
+                    $show = (bool) $options['cover_show_date'];
+                    $coverExport['cover_show_date'] = $show;
+                    $coverExport['show_date'] = $show;
+                }
+                if (!empty($options['cover_source_path'] ?? '')) {
+                    $coverExport['sourcePath'] = (string) $options['cover_source_path'];
+                }
+                if (!empty($options['cover_align'] ?? null) && is_array($options['cover_align'])) {
+                    $coverExport['align'] = $options['cover_align'];
+                }
+                if (!empty($options['cover_offset'] ?? null) && is_array($options['cover_offset'])) {
+                    $coverExport['offset'] = $options['cover_offset'];
+                }
+                if (isset($options['cover_zoom'])) {
+                    $coverExport['zoom'] = (float) $options['cover_zoom'];
+                }
+                if (isset($options['cover_rotation'])) {
+                    $coverExport['rotation'] = (float) $options['cover_rotation'];
+                }
+                if (isset($options['cover_auto'])) {
+                    $coverExport['auto'] = (bool) $options['cover_auto'];
+                }
+                if (isset($options['cover_fit'])) {
+                    $coverExport['fit'] = (string) $options['cover_fit'];
+                }
+                if (isset($options['cover_crop'])) {
+                    $coverExport['crop'] = (string) $options['cover_crop'];
+                }
+                if (isset($options['cover_scale'])) {
+                    $coverExport['scale'] = (float) $options['cover_scale'];
+                }
+                if (isset($options['cover_rotate'])) {
+                    $coverExport['rotate'] = (float) $options['cover_rotate'];
+                }
+                if (!empty($options['cover_object_position'] ?? '')) {
+                    $coverExport['objectPosition'] = (string) $options['cover_object_position'];
+                }
+                if (!empty($options['cover_image_web'] ?? '')) {
+                    $coverExport['webSrc'] = (string) $options['cover_image_web'];
+                }
+                $pagesJson['cover'] = $coverExport;
             }
             @file_put_contents($cacheRoot . DIRECTORY_SEPARATOR . 'pages.json', json_encode($pagesJson, JSON_PRETTY_PRINT));
         } catch (\Throwable $e) {
-            \Log::debug('Builder: pages.json export failed', ['err' => $e->getMessage()]);
+            Log::debug('Builder: pages.json export failed', ['err' => $e->getMessage()]);
         }
 
         // Finish progress
@@ -1121,8 +1212,7 @@ class PhotoBookBuilder
         ob_start();
         @imagejpeg($img, null, 90);
         $out = (string) ob_get_clean();
-        if (is_resource($img))
-            @imagedestroy($img);
+        $this->destroyImage($img);
 
         return [$out ?: $bytes, 'jpg'];
     }
@@ -1240,8 +1330,7 @@ class PhotoBookBuilder
         if (!$img)
             return [0.5, 0.5];
         $fp = $this->entropyFocalPoint($img);
-        if (is_resource($img))
-            @imagedestroy($img);
+        $this->destroyImage($img);
         return $fp;
     }
 
@@ -1281,13 +1370,19 @@ class PhotoBookBuilder
                 }
             }
         }
-        if (is_resource($thumb))
-            @imagedestroy($thumb);
+        $this->destroyImage($thumb);
         if ($sumW <= 0)
             return [0.5, 0.5];
         $fx = $sumX / ($sumW * $tw);
         $fy = $sumY / ($sumW * $th);
         return [max(0.0, min(1.0, $fx)), max(0.0, min(1.0, $fy))];
+    }
+
+    private function destroyImage($img): void
+    {
+        if ($img instanceof \GdImage) {
+            imagedestroy($img);
+        }
     }
     private function buildSlotRender(string $srcPathLocal, string $ext, int $targetW, int $targetH, array $opt): string
     {
@@ -1296,11 +1391,15 @@ class PhotoBookBuilder
             @mkdir($rendersDir, 0775, true);
 
         // Include mtime as a weak stand-in for source versioning (since etag is remote)
-        $mtime = @filemtime($srcPathLocal) ?: 0;
-        $key = sha1($srcPathLocal . '|' . $mtime . '|' . $targetW . 'x' . $targetH . '|' . ($opt['jpeg_quality'] ?? 72));
-        $out = "$rendersDir/$key.jpg";
-        if (is_file($out) && filesize($out) > 0)
-            return $out;
+        $renderQuality = $opt['render_jpeg_quality'] ?? null;
+        if ($renderQuality === null || $renderQuality === '') {
+            $baseQ = (int) ($opt['jpeg_quality'] ?? 88);
+            $renderQuality = $baseQ + 4; // render slots slightly higher quality by default
+        }
+        $renderQuality = max(60, min(96, (int) $renderQuality));
+        $pngCompression = (int) ($opt['png_compression'] ?? 3);
+        $pngCompression = max(0, min(9, $pngCompression));
+        $safetyScale = (float) ($opt['safety_scale'] ?? 1.2);
 
         $bytes = @file_get_contents($srcPathLocal);
         if ($bytes === false)
@@ -1308,6 +1407,27 @@ class PhotoBookBuilder
 
         // 1) normalize rotation for JPEGs
         [$bytes, $ext] = $this->normalizeRotationFromBytes($bytes, $ext);
+        $ext = strtolower($ext ?: 'jpg');
+
+        $encodeAsJpeg = true;
+        if ($ext === 'png' && empty($opt['convert_to_jpeg'])) {
+            $encodeAsJpeg = false;
+        }
+        $outExt = $encodeAsJpeg ? 'jpg' : 'png';
+
+        $mtime = @filemtime($srcPathLocal) ?: 0;
+        $key = sha1(implode('|', [
+            $srcPathLocal,
+            $mtime,
+            $targetW . 'x' . $targetH,
+            $renderQuality,
+            $pngCompression,
+            number_format($safetyScale, 3, '.', ''),
+            $encodeAsJpeg ? 'jpg' : 'png',
+        ]));
+        $out = "$rendersDir/$key.$outExt";
+        if (is_file($out) && filesize($out) > 0)
+            return $out;
 
         // 2) decode
         $src = @imagecreatefromstring($bytes);
@@ -1318,31 +1438,37 @@ class PhotoBookBuilder
 
         $w = imagesx($src);
         $h = imagesy($src);
-        $scale = min(($targetW * ($opt['safety_scale'] ?? 1.15)) / $w, ($targetH * ($opt['safety_scale'] ?? 1.15)) / $h);
+        $scale = min(($targetW * $safetyScale) / $w, ($targetH * $safetyScale) / $h);
         $scale = min(1.0, $scale); // never upscale
         $tw = max(1, (int) floor($w * $scale));
         $th = max(1, (int) floor($h * $scale));
 
         $dst = imagecreatetruecolor($tw, $th);
 
-        // If original has alpha and config allows, flatten to white (smaller, JPEG-friendly)
-        $isPng = in_array(strtolower($ext), ['png']);
-        if ($isPng && !empty($opt['flatten_png_to_white'])) {
-            $white = imagecolorallocate($dst, 255, 255, 255);
-            imagefill($dst, 0, 0, $white);
+        if ($encodeAsJpeg) {
+            if ($ext === 'png' && !empty($opt['flatten_png_to_white'])) {
+                $white = imagecolorallocate($dst, 255, 255, 255);
+                imagefill($dst, 0, 0, $white);
+            }
+        } else {
+            imagealphablending($dst, false);
+            $transparent = imagecolorallocatealpha($dst, 0, 0, 0, 127);
+            imagefill($dst, 0, 0, $transparent);
+            imagesavealpha($dst, true);
         }
 
         imagecopyresampled($dst, $src, 0, 0, 0, 0, $tw, $th, $w, $h);
 
-        if (!empty($opt['progressive_jpeg']))
-            imageinterlace($dst, 1);
-        $q = max(40, min(92, (int) ($opt['jpeg_quality'] ?? 72)));
-        imagejpeg($dst, $out, $q);
+        if ($encodeAsJpeg) {
+            if (!empty($opt['progressive_jpeg']))
+                imageinterlace($dst, 1);
+            imagejpeg($dst, $out, $renderQuality);
+        } else {
+            imagepng($dst, $out, $pngCompression);
+        }
 
-        if (is_resource($dst))
-            imagedestroy($dst);
-        if (is_resource($src))
-            imagedestroy($src);
+        $this->destroyImage($dst);
+        $this->destroyImage($src);
         return $out;
     }
 

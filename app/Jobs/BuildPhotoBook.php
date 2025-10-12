@@ -46,6 +46,25 @@ class BuildPhotoBook implements ShouldQueue
         $orientation = $this->options['orientation'] ?? Config::get('photobook.orientation', 'landscape');
         $dpi = (int) ($this->options['dpi'] ?? Config::get('photobook.dpi'));
 
+        $hash = sha1((string) $folder);
+        $cacheRoot = storage_path('app/pdf-exports/_cache/' . $hash);
+        $pagesPath = $cacheRoot . DIRECTORY_SEPARATOR . 'pages.json';
+        $coverMeta = [];
+        try {
+            if (is_file($pagesPath)) {
+                $doc = json_decode((string) @file_get_contents($pagesPath), true) ?: [];
+                if (!empty($doc['cover']) && is_array($doc['cover'])) {
+                    $coverMeta = $doc['cover'];
+                }
+            }
+        } catch (\Throwable $e) {
+            logger()->debug('PB: cover metadata read failed', ['err' => $e->getMessage()]);
+        }
+        $this->options = $this->normalizeCoverOptions($this->options, $coverMeta);
+        $coverSourcePath = isset($this->options['cover_source_path']) && is_string($this->options['cover_source_path'])
+            ? $this->options['cover_source_path']
+            : null;
+
         $t = microtime(true);
         $photos = $repo->listPhotos($folder);
         logger()->info('PB: repo listed photos', [
@@ -53,6 +72,23 @@ class BuildPhotoBook implements ShouldQueue
             'secs' => round(microtime(true) - $t, 2),
             'mem_mb' => round(memory_get_usage(true) / 1048576, 1),
         ]);
+
+        if ($coverSourcePath) {
+            $before = count($photos);
+            $photos = array_values(array_filter($photos, function ($p) use ($coverSourcePath) {
+                $path = null;
+                if (is_object($p) && isset($p->path)) {
+                    $path = $p->path;
+                } elseif (is_array($p) && isset($p['path'])) {
+                    $path = $p['path'];
+                }
+                return (string) ($path ?? '') !== (string) $coverSourcePath;
+            }));
+            $removed = $before - count($photos);
+            if ($removed > 0) {
+                logger()->info('PB: excluded cover photo from interior pages', ['removed' => $removed, 'path' => $coverSourcePath]);
+            }
+        }
 
         // Run feature extraction if ML is enabled and we're missing features
         if (config('photobook.ml.enable') && \Illuminate\Support\Facades\Schema::hasTable('photo_features')) {
@@ -383,5 +419,214 @@ class BuildPhotoBook implements ShouldQueue
             $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
             @file_put_contents($cacheRoot . DIRECTORY_SEPARATOR . 'task.status.json', json_encode(['state'=>'finished','progress'=>100,'step'=>'Complete','finishedAt'=>date(DATE_ATOM)]));
         } catch (\Throwable $e) {}
+    }
+
+    private function normalizeCoverOptions(array $options, array $coverMeta): array
+    {
+        $titleFromCover = $this->stringOrNull($coverMeta['title'] ?? null);
+        if ($titleFromCover !== null && $this->stringOrNull($options['title'] ?? null) === null) {
+            $options['title'] = $titleFromCover;
+        }
+
+        if ($this->stringOrNull($options['cover_image'] ?? null) === null) {
+            $image = $this->stringOrNull($coverMeta['image'] ?? null);
+            if ($image !== null) {
+                $options['cover_image'] = $image;
+            }
+        }
+
+        $subtitle = $this->stringOrNull($options['cover_subtitle'] ?? $options['subtitle'] ?? null);
+        if ($subtitle === null) {
+            $subtitle = $this->stringOrNull($coverMeta['cover_subtitle'] ?? $coverMeta['subtitle'] ?? null);
+        }
+        if ($subtitle !== null) {
+            $options['cover_subtitle'] = $subtitle;
+            $options['subtitle'] = $subtitle;
+        } else {
+            unset($options['cover_subtitle'], $options['subtitle']);
+        }
+
+        $date = $this->stringOrNull($options['cover_date'] ?? $options['date'] ?? null);
+        if ($date === null) {
+            $date = $this->stringOrNull($coverMeta['cover_date'] ?? $coverMeta['date'] ?? null);
+        }
+        if ($date !== null) {
+            $options['cover_date'] = $date;
+            $options['date'] = $date;
+        } else {
+            unset($options['cover_date'], $options['date']);
+        }
+
+        $show = $this->coerceBool($options['cover_show_date'] ?? null);
+        if ($show === null) {
+            $show = $this->coerceBool($coverMeta['cover_show_date'] ?? $coverMeta['show_date'] ?? null);
+        }
+        if ($show !== null) {
+            $options['cover_show_date'] = $show;
+            $options['show_date'] = $show;
+        } else {
+            unset($options['cover_show_date'], $options['show_date']);
+        }
+
+        $sourcePath = $this->stringOrNull($options['cover_source_path'] ?? ($coverMeta['sourcePath'] ?? null));
+        if ($sourcePath !== null) {
+            $options['cover_source_path'] = $sourcePath;
+        } else {
+            unset($options['cover_source_path']);
+        }
+
+        $align = $options['cover_align'] ?? $coverMeta['align'] ?? null;
+        if (is_array($align)) {
+            $options['cover_align'] = [
+                'x' => $this->clampAlign($align['x'] ?? 0),
+                'y' => $this->clampAlign($align['y'] ?? 0),
+            ];
+        } else {
+            unset($options['cover_align']);
+        }
+
+        $offset = $options['cover_offset'] ?? $coverMeta['offset'] ?? null;
+        if (is_array($offset)) {
+            $options['cover_offset'] = [
+                'x' => $this->coerceFloat($offset['x'] ?? 0.0, 0.0) ?? 0.0,
+                'y' => $this->coerceFloat($offset['y'] ?? 0.0, 0.0) ?? 0.0,
+            ];
+        } else {
+            unset($options['cover_offset']);
+        }
+
+        $zoomCandidate = $this->coercePositiveFloat($options['cover_zoom'] ?? null, null);
+        if ($zoomCandidate === null) {
+            $zoomCandidate = $this->coercePositiveFloat($coverMeta['zoom'] ?? $coverMeta['scale'] ?? null, null);
+        }
+        if ($zoomCandidate !== null) {
+            $options['cover_zoom'] = $zoomCandidate;
+        } else {
+            unset($options['cover_zoom']);
+        }
+
+        if (!isset($options['cover_scale'])) {
+            $scaleCandidate = $this->coercePositiveFloat($coverMeta['scale'] ?? null, null);
+            if ($scaleCandidate !== null) {
+                $options['cover_scale'] = $scaleCandidate;
+            }
+        }
+
+        $rotationCandidate = $this->coerceFloat($options['cover_rotation'] ?? null, null);
+        if ($rotationCandidate === null) {
+            $rotationCandidate = $this->coerceFloat($coverMeta['rotation'] ?? $coverMeta['rotate'] ?? null, null);
+        }
+        if ($rotationCandidate !== null) {
+            $options['cover_rotation'] = $rotationCandidate;
+        } else {
+            unset($options['cover_rotation']);
+        }
+
+        if (!isset($options['cover_rotate'])) {
+            $rotateCandidate = $this->coerceFloat($coverMeta['rotate'] ?? null, null);
+            if ($rotateCandidate !== null) {
+                $options['cover_rotate'] = $rotateCandidate;
+            }
+        }
+
+        $autoCandidate = $this->coerceBool($options['cover_auto'] ?? null);
+        if ($autoCandidate === null) {
+            $autoCandidate = $this->coerceBool($coverMeta['auto'] ?? null);
+        }
+        if ($autoCandidate !== null) {
+            $options['cover_auto'] = $autoCandidate;
+        } else {
+            unset($options['cover_auto']);
+        }
+
+        $fitCandidate = $options['cover_fit'] ?? $coverMeta['fit'] ?? $coverMeta['crop'] ?? null;
+        if (is_string($fitCandidate) && $fitCandidate !== '') {
+            $options['cover_fit'] = strtolower($fitCandidate) === 'contain' ? 'contain' : 'cover';
+        }
+
+        if (!isset($options['cover_crop'])) {
+            if (isset($coverMeta['crop'])) {
+                $options['cover_crop'] = strtolower((string) $coverMeta['crop']) === 'contain' ? 'contain' : 'cover';
+            } elseif (isset($options['cover_fit'])) {
+                $options['cover_crop'] = $options['cover_fit'];
+            }
+        }
+
+        $objectPos = $this->stringOrNull($options['cover_object_position'] ?? ($coverMeta['object_position'] ?? $coverMeta['objectPosition'] ?? null));
+        if ($objectPos !== null) {
+            $options['cover_object_position'] = $objectPos;
+        } else {
+            unset($options['cover_object_position']);
+        }
+
+        if (!isset($options['cover_image_web']) && isset($coverMeta['webSrc'])) {
+            $options['cover_image_web'] = (string) $coverMeta['webSrc'];
+        }
+
+        return $options;
+    }
+
+    private function stringOrNull($value): ?string
+    {
+        if (is_string($value) || is_numeric($value)) {
+            $trimmed = trim((string) $value);
+            return $trimmed !== '' ? $trimmed : null;
+        }
+        return null;
+    }
+
+    private function coerceFloat($value, ?float $default = null): ?float
+    {
+        if (is_numeric($value)) {
+            return (float) $value;
+        }
+        return $default;
+    }
+
+    private function coercePositiveFloat($value, ?float $default = null): ?float
+    {
+        $num = $this->coerceFloat($value, null);
+        if ($num === null) {
+            return $default;
+        }
+        return $num > 0 ? $num : $default;
+    }
+
+    private function coerceBool($value): ?bool
+    {
+        if (is_null($value)) {
+            return null;
+        }
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_numeric($value)) {
+            return ((float) $value) != 0.0;
+        }
+        if (is_string($value)) {
+            $v = strtolower(trim($value));
+            if ($v === '') {
+                return null;
+            }
+            if (in_array($v, ['1', 'true', 'yes', 'on'], true)) {
+                return true;
+            }
+            if (in_array($v, ['0', 'false', 'no', 'off'], true)) {
+                return false;
+            }
+        }
+        return null;
+    }
+
+    private function clampAlign($value): float
+    {
+        $num = $this->coerceFloat($value, 0.0) ?? 0.0;
+        if ($num < -1.0) {
+            return -1.0;
+        }
+        if ($num > 1.0) {
+            return 1.0;
+        }
+        return $num;
     }
 }

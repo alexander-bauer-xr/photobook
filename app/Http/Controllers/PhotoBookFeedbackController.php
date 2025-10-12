@@ -134,9 +134,17 @@ class PhotoBookFeedbackController extends Controller
                 $out = [
                     'slotIndex' => (int) ($it['slotIndex'] ?? 0),
                 ];
-                foreach (['crop','objectPosition','src'] as $k) if (isset($it[$k])) $out[$k] = $it[$k];
+                // Legacy
+                foreach (['crop','objectPosition','src'] as $k) if (array_key_exists($k, $it)) $out[$k] = $it[$k];
                 if (isset($it['scale'])) $out['scale'] = (float) $it['scale'];
                 if (isset($it['rotate'])) $out['rotate'] = (float) $it['rotate'];
+                if (array_key_exists('caption', $it)) $out['caption'] = is_string($it['caption']) || is_numeric($it['caption']) ? (string) $it['caption'] : null;
+                // Canonical (preferred by builder/UI)
+                foreach (['fit','align','offset','zoom','rotation','auto'] as $k) {
+                    if (array_key_exists($k, $it)) {
+                        $out[$k] = $it[$k];
+                    }
+                }
                 if (!empty($it['photo']) && is_array($it['photo'])) {
                     $ph = $it['photo'];
                     $out['photo'] = [

@@ -109,6 +109,13 @@ type Page = {
   templateId?: string;   // <--- add this
 };
 
+type CoverMeta = {
+  title?: string | null;
+  subtitle?: string | null;
+  date?: string | null;
+  hasPhoto?: boolean | null;
+};
+
 type SaveOverride = {
   page: number;
   slotIndex: number;
@@ -130,6 +137,7 @@ type Props = {
    gapPx?: number;
    wheelZoomNeedsCtrl?: boolean;
    showHud?: boolean;
+   coverMeta?: CoverMeta;
  };
 
 /* =========================================================
@@ -276,6 +284,7 @@ export default function EditorCanvas({
    gapPx = 8,
    wheelZoomNeedsCtrl = true,
   showHud = true,
+  coverMeta,
 }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [pageSize, setPageSize] = useState({ w: width, h: height });
@@ -298,6 +307,22 @@ export default function EditorCanvas({
     slotLeft: number; slotTop: number; slotW: number; slotH: number;
     contentW: number; contentH: number; innerPad: number;
   }>>({});
+
+  const isCoverPage = page?.templateId === 'cover' || page?.n === 0 || (page as any)?.id === 'cover';
+  const primarySlotHeight = Array.isArray(page.slots) && page.slots.length > 0
+    ? (Number(page.slots[0]?.h) || 0.649)
+    : 0.649;
+  const normalizedCoverSlotHeight = isCoverPage
+    ? Math.max(0.1, Math.min(0.9, primarySlotHeight || 0.649))
+    : 0.649;
+  const mergedCoverMeta = isCoverPage
+    ? {
+        title: coverMeta?.title ?? null,
+        subtitle: coverMeta?.subtitle ?? null,
+        date: coverMeta?.date ?? null,
+        hasPhoto: coverMeta?.hasPhoto ?? null,
+      }
+    : null;
 
   // Reset bei Seitenwechsel/Version (und neue History-Basis)
   useEffect(() => {
@@ -673,10 +698,11 @@ export default function EditorCanvas({
         className="relative bg-white shadow border border-neutral-200 rounded"
         style={{ width, height, userSelect: 'none' }}
       >
-  {items.map((it, i) => {
+        {items.map((it, i) => {
           const slots: Slot[] = Array.isArray(page.slots) ? page.slots : [];
           const s = slots[it.slotIndex] || { x: 0, y: 0, w: 1, h: 1 };
           const isSel = selectedIdx === i;
+          const isCoverItem = isCoverPage && i === 0;
 
           // ganzzahlige px (Parität/Anti-Hairline)
           const slotLeft = Math.round(s.x * pageSize.w);
@@ -684,7 +710,7 @@ export default function EditorCanvas({
           const slotW = Math.round(s.w * pageSize.w);
           const slotH = Math.round(s.h * pageSize.h);
 
-          const innerPad = Math.floor(gapPx / 2);
+          const innerPad = isCoverItem ? 0 : Math.floor(gapPx / 2);
           const contentW = Math.max(0, slotW - gapPx);
           const contentH = Math.max(0, slotH - gapPx);
 
@@ -703,6 +729,11 @@ export default function EditorCanvas({
 
           const src = getSrc(it);
           const loaded = iw > 0 && ih > 0;
+          let coverItemHasPhoto: boolean | undefined;
+          if (isCoverItem) {
+            const metaHasPhoto = mergedCoverMeta?.hasPhoto;
+            coverItemHasPhoto = typeof metaHasPhoto === 'boolean' ? metaHasPhoto : !!src;
+          }
 
           // Layout Snapshot für Wheel/Pinch
           layoutRef.current[i] = { slotLeft, slotTop, slotW, slotH, contentW, contentH, innerPad };
@@ -720,10 +751,47 @@ export default function EditorCanvas({
                 onSelect={setSelectedIdx}
                 onUpdateItem={(updater) => setItems(list => list.map((m2, idx2) => idx2 === i ? updater(m2 as any) as any : m2))}
                 onCommit={commitItems}
+                variant={isCoverItem ? 'cover' : 'default'}
+                coverHasPhoto={isCoverItem ? (coverItemHasPhoto ?? undefined) : undefined}
+                coverPlaceholderText="No cover photo selected"
               />
             </React.Fragment>
           );
         })}
+        {isCoverPage && (
+          <div
+            className="absolute left-0 right-0"
+            style={{
+              top: `${normalizedCoverSlotHeight * 100}%`,
+              bottom: 0,
+              padding: '36px 48px',
+              background: '#ffffff',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'center',
+              gap: '12px',
+              pointerEvents: 'none',
+              fontFamily: '"Inter", "Helvetica Neue", sans-serif',
+              color: '#111827',
+            }}
+          >
+            {mergedCoverMeta?.title && (
+              <div style={{ fontSize: '34px', fontWeight: 600, letterSpacing: '0.02em', lineHeight: 1.1 }}>
+                {mergedCoverMeta.title}
+              </div>
+            )}
+            {mergedCoverMeta?.subtitle && (
+              <div style={{ fontSize: '20px', fontWeight: 500, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6b7280' }}>
+                {mergedCoverMeta.subtitle}
+              </div>
+            )}
+            {mergedCoverMeta?.date && (
+              <div style={{ fontSize: '18px', letterSpacing: '0.12em', textTransform: 'uppercase', color: '#9ca3af' }}>
+                {mergedCoverMeta.date}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex gap-2">
