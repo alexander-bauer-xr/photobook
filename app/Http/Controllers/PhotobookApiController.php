@@ -420,20 +420,155 @@ class PhotobookApiController extends Controller
         $data = $req->validate([
             'image' => 'required|string',
             'title' => 'nullable|string',
+            'subtitle' => 'nullable|string',
+            'date' => 'nullable|string',
+            'show_date' => 'nullable|boolean',
+            'source_path' => 'nullable|string',
+            'fit' => 'nullable|string',
+            'crop' => 'nullable|string',
+            'align' => 'nullable|array',
+            'align.x' => 'nullable|numeric',
+            'align.y' => 'nullable|numeric',
+            'offset' => 'nullable|array',
+            'offset.x' => 'nullable|numeric',
+            'offset.y' => 'nullable|numeric',
+            'zoom' => 'nullable|numeric',
+            'rotation' => 'nullable|numeric',
+            'auto' => 'nullable|boolean',
+            'scale' => 'nullable|numeric',
+            'rotate' => 'nullable|numeric',
+            'object_position' => 'nullable|string',
         ]);
         $path = $this->pagesPath($hash);
         if (!is_file($path))
             return response()->json(['error' => 'pages.json not found'], 404);
 
         $lock = Cache::lock("pb:pages:$hash", 10);
-        return $lock->block(10, function () use ($path, $data) {
+        return $lock->block(10, function () use ($path, $data, $hash) {
             $doc = json_decode((string) @file_get_contents($path), true) ?: [];
-            $doc['cover'] = [
-                'image' => $data['image'],
-                'title' => $data['title'] ?? ($doc['manifest']['title'] ?? ''),
-            ];
+            $existingCover = is_array($doc['cover'] ?? null) ? $doc['cover'] : [];
+
+            $imageRel = ltrim((string) $data['image'], '/');
+
+            $titleValue = array_key_exists('title', $data)
+                ? trim((string) ($data['title'] ?? ''))
+                : (string) ($existingCover['title'] ?? ($doc['manifest']['title'] ?? ''));
+            if ($titleValue === '') {
+                $titleValue = (string) ($doc['manifest']['title'] ?? '');
+            }
+
+            $cover = $existingCover;
+            $cover['image'] = $imageRel;
+            $cover['title'] = $titleValue;
+
+            $cover['webSrc'] = $this->normalizeAssetUrl($hash, $imageRel) ?? ($cover['webSrc'] ?? null);
+
+            if (array_key_exists('subtitle', $data)) {
+                $subtitleValue = trim((string) ($data['subtitle'] ?? ''));
+                $cover['subtitle'] = $subtitleValue;
+                $cover['cover_subtitle'] = $subtitleValue;
+            }
+
+            if (array_key_exists('date', $data)) {
+                $dateValue = trim((string) ($data['date'] ?? ''));
+                $cover['date'] = $dateValue;
+                $cover['cover_date'] = $dateValue;
+            }
+
+            if (array_key_exists('show_date', $data)) {
+                $showDateValue = (bool) $data['show_date'];
+                $cover['show_date'] = $showDateValue;
+                $cover['cover_show_date'] = $showDateValue;
+            }
+
+            if (array_key_exists('source_path', $data)) {
+                $sourcePath = is_string($data['source_path']) ? trim($data['source_path']) : $data['source_path'];
+                if (is_string($sourcePath) && $sourcePath !== '') {
+                    $cover['sourcePath'] = $sourcePath;
+                } else {
+                    unset($cover['sourcePath']);
+                }
+            }
+
+            if (array_key_exists('fit', $data) && is_string($data['fit'])) {
+                $cover['fit'] = strtolower($data['fit']) === 'contain' ? 'contain' : 'cover';
+            }
+            if (array_key_exists('crop', $data) && is_string($data['crop'])) {
+                $cover['crop'] = strtolower($data['crop']) === 'contain' ? 'contain' : 'cover';
+            } elseif (isset($cover['fit'])) {
+                $cover['crop'] = $cover['fit'];
+            }
+
+            if (isset($data['align']) && is_array($data['align'])) {
+                $ax = is_numeric($data['align']['x'] ?? null) ? (float) $data['align']['x'] : 0.0;
+                $ay = is_numeric($data['align']['y'] ?? null) ? (float) $data['align']['y'] : 0.0;
+                $cover['align'] = [
+                    'x' => max(-1.0, min(1.0, $ax)),
+                    'y' => max(-1.0, min(1.0, $ay)),
+                ];
+            }
+
+            if (isset($data['offset']) && is_array($data['offset'])) {
+                $ox = is_numeric($data['offset']['x'] ?? null) ? (float) $data['offset']['x'] : 0.0;
+                $oy = is_numeric($data['offset']['y'] ?? null) ? (float) $data['offset']['y'] : 0.0;
+                $cover['offset'] = ['x' => $ox, 'y' => $oy];
+            }
+
+            if (array_key_exists('zoom', $data) && $data['zoom'] !== null) {
+                $zoomVal = (float) $data['zoom'];
+                if ($zoomVal > 0) {
+                    $cover['zoom'] = $zoomVal;
+                }
+            }
+            if (array_key_exists('scale', $data) && $data['scale'] !== null) {
+                $scaleVal = (float) $data['scale'];
+                if ($scaleVal > 0) {
+                    $cover['scale'] = $scaleVal;
+                }
+            }
+
+            if (array_key_exists('rotation', $data) && $data['rotation'] !== null) {
+                $cover['rotation'] = (float) $data['rotation'];
+            }
+            if (array_key_exists('rotate', $data) && $data['rotate'] !== null) {
+                $cover['rotate'] = (float) $data['rotate'];
+            }
+
+            if (array_key_exists('auto', $data)) {
+                $cover['auto'] = (bool) $data['auto'];
+            }
+
+            if (array_key_exists('object_position', $data) && is_string($data['object_position'])) {
+                $pos = trim($data['object_position']);
+                if ($pos !== '') {
+                    $cover['objectPosition'] = $pos;
+                    $cover['object_position'] = $pos;
+                }
+            }
+
+            $doc['cover'] = $cover;
             $doc['updatedAt'] = now()->toIso8601String();
             $this->writeJsonAtomic($path, $doc);
+
+            // Remove legacy cover override entry so the first interior page no longer references the cover photo
+            try {
+                $ovPath = $this->albumDir($hash) . DIRECTORY_SEPARATOR . 'overrides.json';
+                if (is_file($ovPath)) {
+                    $ov = json_decode((string) @file_get_contents($ovPath), true) ?: [];
+                    if (isset($ov['pages']) && is_array($ov['pages'])) {
+                        $first = $ov['pages']['1'] ?? null;
+                        if (is_array($first) && (($first['templateId'] ?? '') === 'cover')) {
+                            unset($ov['pages']['1']);
+                            if (empty($ov['pages'])) {
+                                $ov['pages'] = [];
+                            }
+                            @file_put_contents($ovPath, json_encode($ov, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                // ignore cleanup failures
+            }
             return response()->json(['ok' => true, 'cover' => $doc['cover']]);
         });
     }
@@ -469,10 +604,11 @@ class PhotobookApiController extends Controller
 
         $options = [
             'folder' => $folder,
-            'title' => (string) $req->input('title', ''),
+            'title' => trim((string) $req->input('title', '')),
             'cover_image' => (string) $req->input('cover_image', ''),
             'ui_triggered' => true,
         ];
+        $options = array_merge($options, $this->extractCoverOptionPayload($req));
         BuildPhotoBook::dispatch($options);
 
         // Initialize progress file
@@ -503,10 +639,11 @@ class PhotobookApiController extends Controller
 
         $options = [
             'folder' => $folder,
-            'title' => (string) $req->input('title', ''),
+            'title' => trim((string) $req->input('title', '')),
             'cover_image' => (string) $req->input('cover_image', ''),
             'ui_triggered' => true,
         ];
+        $options = array_merge($options, $this->extractCoverOptionPayload($req));
         BuildPhotoBook::dispatch($options);
 
         $hash = sha1($folder);
@@ -533,6 +670,107 @@ class PhotobookApiController extends Controller
             'status' => $status ? json_decode($status, true) : null,
             'logTail' => $logTail ? mb_substr($logTail, -8000) : '',
         ]);
+    }
+
+    private function extractCoverOptionPayload(Request $req): array
+    {
+        $payload = [];
+
+        $subtitle = trim((string) $req->input('cover_subtitle', ''));
+        if ($subtitle !== '') {
+            $payload['cover_subtitle'] = $subtitle;
+            $payload['subtitle'] = $subtitle;
+        }
+
+        $date = trim((string) $req->input('cover_date', ''));
+        if ($date !== '') {
+            $payload['cover_date'] = $date;
+            $payload['date'] = $date;
+        }
+
+        if ($req->has('cover_show_date')) {
+            $show = $req->boolean('cover_show_date');
+            $payload['cover_show_date'] = $show;
+            $payload['show_date'] = $show;
+        }
+
+        $sourcePath = trim((string) $req->input('cover_source_path', ''));
+        if ($sourcePath !== '') {
+            $payload['cover_source_path'] = $sourcePath;
+        }
+
+        $align = $req->input('cover_align');
+        if (is_array($align)) {
+            $payload['cover_align'] = [
+                'x' => $this->clampAlignComponent($align['x'] ?? 0),
+                'y' => $this->clampAlignComponent($align['y'] ?? 0),
+            ];
+        }
+
+        $offset = $req->input('cover_offset');
+        if (is_array($offset)) {
+            $payload['cover_offset'] = [
+                'x' => $this->floatValue($offset['x'] ?? 0.0),
+                'y' => $this->floatValue($offset['y'] ?? 0.0),
+            ];
+        }
+
+        if ($req->filled('cover_zoom')) {
+            $payload['cover_zoom'] = $this->positiveFloatValue($req->input('cover_zoom'), 1.0);
+        }
+
+        if ($req->filled('cover_rotation')) {
+            $payload['cover_rotation'] = $this->floatValue($req->input('cover_rotation'), 0.0);
+        }
+
+        if ($req->has('cover_auto')) {
+            $payload['cover_auto'] = $req->boolean('cover_auto');
+        }
+
+        $fit = $req->input('cover_fit');
+        if (is_string($fit) && $fit !== '') {
+            $payload['cover_fit'] = strtolower($fit) === 'contain' ? 'contain' : 'cover';
+        }
+
+        $crop = $req->input('cover_crop');
+        if (is_string($crop) && $crop !== '') {
+            $payload['cover_crop'] = strtolower($crop) === 'contain' ? 'contain' : 'cover';
+        }
+
+        if ($req->filled('cover_scale')) {
+            $payload['cover_scale'] = $this->positiveFloatValue($req->input('cover_scale'), 1.0);
+        }
+
+        if ($req->filled('cover_rotate')) {
+            $payload['cover_rotate'] = $this->floatValue($req->input('cover_rotate'), 0.0);
+        }
+
+        $objectPos = trim((string) $req->input('cover_object_position', ''));
+        if ($objectPos !== '') {
+            $payload['cover_object_position'] = $objectPos;
+        }
+
+        return $payload;
+    }
+
+    private function clampAlignComponent($value): float
+    {
+        $num = $this->floatValue($value, 0.0);
+        return max(-1.0, min(1.0, $num));
+    }
+
+    private function floatValue($value, float $default = 0.0): float
+    {
+        if (is_numeric($value)) {
+            return (float) $value;
+        }
+        return $default;
+    }
+
+    private function positiveFloatValue($value, float $default = 1.0): float
+    {
+        $num = $this->floatValue($value, $default);
+        return $num > 0 ? $num : $default;
     }
 
     private function applyPatch(array $doc, array $op): array

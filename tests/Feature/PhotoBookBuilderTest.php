@@ -11,7 +11,6 @@ class PhotoBookBuilderTest extends TestCase
     public function test_auto_pick_cover_uses_cached_map_for_converted_images(): void
     {
         $folder = 'TestAlbumNonJpeg';
-        config(['photobook.folder' => $folder]);
 
         $hash = sha1($folder);
         $cacheRoot = storage_path('app/pdf-exports/_cache/' . $hash);
@@ -71,5 +70,7 @@ class PhotoBookBuilderTest extends TestCase
         $this->assertSame('images/' . $convertedName, $coverItem['rel']);
         $this->assertStringStartsWith('file:///', $coverItem['src']);
         $this->assertStringEndsWith($convertedName, $coverItem['src']);
+
+        File::deleteDirectory($cacheRoot);
     }
 }

@@ -116,9 +116,12 @@ Route::get('/photobook/pages', function (Request $r) {
                     }
                 }
             } catch (\Throwable $e) {}
-            foreach (($data['pages'] ?? []) as &$p) {
-                $n = (string) ($p['n'] ?? '');
-                if ($n === '' || !isset($ovPages[$n]) || !is_array($ovPages[$n])) continue;
+            foreach (($data['pages'] ?? []) as $i => &$p) {
+                // Use explicit page number when available, else fallback to sequential index (1-based)
+                $pageNo = (int) ($p['n'] ?? 0);
+                if ($pageNo <= 0) { $pageNo = $i + 1; }
+                $n = (string) $pageNo;
+                if (!isset($ovPages[$n]) || !is_array($ovPages[$n])) continue;
                 $ovp = $ovPages[$n];
                 if (!empty($ovp['templateId'])) {
                     $p['templateId'] = (string) $ovp['templateId'];
