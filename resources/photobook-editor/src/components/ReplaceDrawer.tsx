@@ -8,9 +8,11 @@ type Props = {
   loading?: boolean;
   candidates: Candidate[];
   onPick: (c: Candidate, opts: { preserveCrop: boolean }) => void;
+  onLoadAll?: () => void;
+  showingAll?: boolean;
 };
 
-export default function ReplaceDrawer({ open, onClose, loading = false, candidates, onPick }: Props) {
+export default function ReplaceDrawer({ open, onClose, loading = false, candidates, onPick, onLoadAll, showingAll = false }: Props) {
   const [preserveCrop, setPreserveCrop] = useState(true);
   const [filterOrientation, setFilterOrientation] = useState('all');
   const [filterRecent, setFilterRecent] = useState('all');
@@ -36,8 +38,15 @@ export default function ReplaceDrawer({ open, onClose, loading = false, candidat
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
       <div className="absolute right-0 top-0 h-full w-[420px] bg-white shadow-xl border-l border-neutral-200 flex flex-col">
         <div className="p-4 border-b border-neutral-200 flex items-center justify-between">
-          <div className="font-semibold">Replace Photo</div>
-          <button className="px-2 py-1 text-sm rounded bg-neutral-200" onClick={onClose}>Close</button>
+          <div className="font-semibold">Replace Photo {showingAll && <span className="text-sm font-normal text-neutral-500">(All Images)</span>}</div>
+          <div className="flex items-center gap-2">
+            {onLoadAll && !showingAll && (
+              <button className="px-3 py-1 text-sm rounded bg-blue-500 text-white hover:bg-blue-600" onClick={onLoadAll}>
+                Show All Images
+              </button>
+            )}
+            <button className="px-2 py-1 text-sm rounded bg-neutral-200 hover:bg-neutral-300" onClick={onClose}>Close</button>
+          </div>
         </div>
         <div className="px-3 pt-3 pb-2 border-b border-neutral-200 flex items-center gap-2 text-xs">
           <label className="flex items-center gap-1">

@@ -774,6 +774,7 @@ class PhotoBookBuilder
         }
 
     $defaultFontFamily = trim((string) config('photobook.pdf.default_font', 'Inter')) ?: 'Inter';
+    $fontFaces = PdfFontManager::fontFacesForCss();
 
         $html = view('photobook.layout', [
             'options' => $options,
@@ -787,6 +788,7 @@ class PhotoBookBuilder
                 'dpi' => (int) config('photobook.dpi'),
             ],
             'fontFamily' => $defaultFontFamily,
+            'fontFaces' => $fontFaces,
         ])->render();
 
     Log::debug('Builder: html built', ['kb' => round(strlen($html) / 1024, 1)]);

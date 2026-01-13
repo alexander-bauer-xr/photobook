@@ -348,14 +348,16 @@ class PhotoBookController extends Controller
     }
 
     /**
-     * GET /photobook/candidates?folder=&page=
-     * For now return a simple set of candidate photos: all photos from this page and adjacent pages as a starting point.
+     * GET /photobook/candidates?folder=&page=&all=
+     * Returns candidate photos. If all=1, returns all photos from folder. Otherwise, returns photos from page ±1.
      */
     public function candidates(Request $request)
     {
         $folder = $request->string('folder', Config::get('photobook.folder'))->toString();
         $pageNo = (int) $request->query('page', 0);
-        if ($pageNo < 1)
+        $all = $request->boolean('all', false);
+
+        if (!$all && $pageNo < 1)
             return response()->json(['ok' => false, 'error' => 'invalid page'], 422);
 
         $hash = sha1($folder);
@@ -370,7 +372,9 @@ class PhotoBookController extends Controller
         $photos = [];
         foreach ($pages as $p) {
             $n = (int) ($p['n'] ?? 0);
-            if ($n >= $pageNo - 1 && $n <= $pageNo + 1) {
+            // If all=true, include all pages. Otherwise, only include page ±1
+            $includeThisPage = $all || ($n >= $pageNo - 1 && $n <= $pageNo + 1);
+            if ($includeThisPage) {
                 foreach (($p['items'] ?? []) as $it) {
                     $ph = $it['photo'] ?? null;
                     if (is_array($ph) && !empty($ph['path'])) {

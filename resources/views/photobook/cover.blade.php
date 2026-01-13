@@ -125,7 +125,8 @@
 }
 
 .cover-title {
-    font-size: 34px;
+    font-size: 64px;
+    font-family: "Inter", sans-serif;
     font-weight: 600;
     letter-spacing: 0.02em;
 }

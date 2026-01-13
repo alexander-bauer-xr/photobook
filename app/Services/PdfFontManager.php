@@ -70,12 +70,19 @@ class PdfFontManager
     public static function fontFacesForCss(): array
     {
         $faces = [];
+        $chrootBase = storage_path('app');
         foreach (self::configuredFonts() as $family => $variants) {
             foreach ($variants as $variant => $meta) {
+                $src = self::pathToFileUrl($meta['path']);
+                // If DomPDF chroot is set to storage/app, make paths relative to chroot
+                if (str_starts_with($meta['path'], $chrootBase . DIRECTORY_SEPARATOR)) {
+                    $relativePath = substr($meta['path'], strlen($chrootBase) + 1);
+                    $src = '/' . str_replace('\\', '/', $relativePath);
+                }
                 $faces[$family][] = [
                     'style' => $meta['style'],
                     'weight' => $meta['weight'],
-                    'src' => self::pathToFileUrl($meta['path']),
+                    'src' => $src,
                     'format' => self::guessFontFormat($meta['path']),
                 ];
             }
