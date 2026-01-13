@@ -36,6 +36,7 @@ function Root() {
   const [drawerIdx, setDrawerIdx] = useState(null as number | null);
   const [candidates, setCandidates] = useState([] as { path: string; filename: string; src?: string | null }[]);
   const [candLoading, setCandLoading] = useState(false);
+  const [showingAllCandidates, setShowingAllCandidates] = useState(false);
   const [pageVersion, setPageVersion] = useState(0);
   const [coverTitle, setCoverTitle] = useState('');
   const [coverPath, setCoverPath] = useState<string | null>(null);
@@ -497,12 +498,26 @@ function Root() {
   const openReplace = async (i: number) => {
     setDrawerIdx(i);
     setDrawerOpen(true);
+    setShowingAllCandidates(false);
     setCandLoading(true);
     try {
       // For cover (index 0), use page 1 candidates
       const effectivePage = pageIdx === 0 ? 1 : (page?.n || 1);
       const r = await api.getCandidates(folder, effectivePage);
       setCandidates(r.candidates || []);
+    } finally {
+      setCandLoading(false);
+    }
+  };
+
+  // load all candidates from folder
+  const loadAllCandidates = async () => {
+    setCandLoading(true);
+    try {
+      const effectivePage = pageIdx === 0 ? 1 : (page?.n || 1);
+      const r = await api.getCandidates(folder, effectivePage, true);
+      setCandidates(r.candidates || []);
+      setShowingAllCandidates(true);
     } finally {
       setCandLoading(false);
     }
@@ -944,7 +959,15 @@ function Root() {
             </div>
           </div>
         )}
-        <ReplaceDrawer open={drawerOpen && canEditPage} onClose={() => setDrawerOpen(false)} loading={candLoading} candidates={candidates} onPick={(c, o) => applyReplacement(c, o)} />
+        <ReplaceDrawer
+          open={drawerOpen && canEditPage}
+          onClose={() => setDrawerOpen(false)}
+          loading={candLoading}
+          candidates={candidates}
+          onPick={(c, o) => applyReplacement(c, o)}
+          onLoadAll={loadAllCandidates}
+          showingAll={showingAllCandidates}
+        />
       </main>
       {latestPdfUrl && (
         <PdfReadyModal url={latestPdfUrl} onClose={() => setLatestPdfUrl(null)} />

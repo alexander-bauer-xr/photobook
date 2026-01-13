@@ -63,8 +63,12 @@ export const api = {
   async getCandidates(
     folder: string,
     page: number,
+    all?: boolean,
   ): Promise<{ ok: boolean; candidates: { path: string; filename: string; src?: string | null }[] }> {
-        const u = '/photobook/candidates?folder=' + encodeURIComponent(folder) + '&page=' + encodeURIComponent(String(page));
+        let u = '/photobook/candidates?folder=' + encodeURIComponent(folder) + '&page=' + encodeURIComponent(String(page));
+        if (all) {
+          u += '&all=1';
+        }
         return okJson(await fetch(u, { headers: commonHeaders(), credentials: 'same-origin' }));
   },
   async overrideTemplate(payload: OverridePayload) {

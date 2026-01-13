@@ -7,6 +7,12 @@ module.exports = {
     './resources/**/*.tsx',
     './resources/photobook-editor/**/*.{ts,tsx,html,php}',
   ],
-  theme: { extend: {} },
+  theme: {
+    extend: {
+      fontFamily: {
+        sans: ['Inter', 'Helvetica Neue', 'sans-serif'],
+      },
+    },
+  },
   plugins: [],
 }

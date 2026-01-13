@@ -29,14 +29,14 @@ class PdfRenderer
     $fontDir = PdfFontManager::prepareFontDirectory();
     $opts->setFontDir($fontDir);
     $opts->setFontCache($fontDir);
-    if ($defaultFont = (string) config('photobook.pdf.default_font', 'Inter')) {
-        $opts->set('defaultFont', $defaultFont);
-    }
+    // Use DejaVu Sans as fallback - Dompdf has this built-in with wide glyph coverage
+    $opts->set('defaultFont', 'DejaVu Sans');
     // Restrict Dompdf to storage/app so file:// paths are accessible
     $opts->setChroot(storage_path('app'));
 
     $dompdf = new Dompdf($opts);
-    PdfFontManager::registerFonts($dompdf);
+    // Note: Fonts are loaded via @font-face in CSS, not registerFonts()
+    // PdfFontManager::registerFonts($dompdf);
     $dompdf->loadHtml($html);
     $dompdf->setPaper($paper, $orientation);
     Log::info('PDF: starting render', ['paper' => $paper, 'orientation' => $orientation, 'dpi' => $dpi, 'html_kb' => round(strlen($html)/1024,1)]);
