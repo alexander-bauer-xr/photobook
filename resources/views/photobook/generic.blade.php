@@ -26,9 +26,10 @@
       };
       $gapHalfMm = $formatMm(((float) config('photobook.page_gap_mm', 2.5)) / 2);
   }
+  $spineClass = $spineClass ?? '';
 @endphp
 <div class="page">
-  <div class="page-inner">
+  <div class="page-inner {{ $spineClass }}">
     @foreach($items as $it)
       @php $s = $slots[$it['slotIndex']] ?? null; if(!$s) continue; @endphp
       <div class="slot"
@@ -100,4 +101,21 @@
       </div>
     @endforeach
   </div>
+
+  {{-- Crop marks for print-ready mode --}}
+  @if(!empty($showCropMarks))
+    <div class="crop-marks">
+      <div class="crop-mark h top-left-h"></div>
+      <div class="crop-mark v top-left-v"></div>
+      <div class="crop-mark h top-right-h"></div>
+      <div class="crop-mark v top-right-v"></div>
+      <div class="crop-mark h bottom-left-h"></div>
+      <div class="crop-mark v bottom-left-v"></div>
+      <div class="crop-mark h bottom-right-h"></div>
+      <div class="crop-mark v bottom-right-v"></div>
+    </div>
+    @if(!empty($pageNumber))
+      <div class="print-info">Page {{ $pageNumber }}</div>
+    @endif
+  @endif
 </div>

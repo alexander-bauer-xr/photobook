@@ -42,6 +42,26 @@ class BuildPhotoBook implements ShouldQueue
         ]);
 
         $folder = $this->options['folder'] ?? Config::get('photobook.folder');
+        
+        // Helper to update progress status
+        $updateProgress = function(int $progress, string $step, string $state = 'running') use ($folder) {
+            try {
+                $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
+                if (!is_dir($cacheRoot)) {
+                    @mkdir($cacheRoot, 0755, true);
+                }
+                @file_put_contents($cacheRoot . DIRECTORY_SEPARATOR . 'task.status.json', json_encode([
+                    'state' => $state,
+                    'progress' => $progress,
+                    'step' => $step,
+                    'updatedAt' => date(DATE_ATOM)
+                ]));
+                // Also log to console for visibility
+                logger()->info("PB: [{$progress}%] {$step}");
+            } catch (\Throwable $e) {}
+        };
+        
+        $updateProgress(1, 'Starting build...');
         $paper = $this->options['paper'] ?? Config::get('photobook.paper');
         $orientation = $this->options['orientation'] ?? Config::get('photobook.orientation', 'landscape');
         $dpi = (int) ($this->options['dpi'] ?? Config::get('photobook.dpi'));
@@ -65,6 +85,7 @@ class BuildPhotoBook implements ShouldQueue
             ? $this->options['cover_source_path']
             : null;
 
+        $updateProgress(5, 'Listing photos from Nextcloud...');
         $t = microtime(true);
         $photos = $repo->listPhotos($folder);
         logger()->info('PB: repo listed photos', [
@@ -72,6 +93,7 @@ class BuildPhotoBook implements ShouldQueue
             'secs' => round(microtime(true) - $t, 2),
             'mem_mb' => round(memory_get_usage(true) / 1048576, 1),
         ]);
+        $updateProgress(10, 'Found ' . count($photos) . ' photos');
 
         if ($coverSourcePath) {
             $before = count($photos);
@@ -112,14 +134,7 @@ class BuildPhotoBook implements ShouldQueue
             
             if ($needsExtraction) {
                 try {
-                    // Update progress
-                    $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
-                    @file_put_contents($cacheRoot . DIRECTORY_SEPARATOR . 'task.status.json', json_encode([
-                        'state' => 'running', 
-                        'progress' => 5, 
-                        'step' => 'Extracting ML features...',
-                        'startedAt' => date(DATE_ATOM)
-                    ]));
+                    $updateProgress(12, 'Extracting ML features (this may take a while)...');
                     
                     logger()->info('PB: Running feature extraction for folder: ' . $folder);
                     \Illuminate\Support\Facades\Artisan::call('photobook:extract', [
@@ -141,6 +156,7 @@ class BuildPhotoBook implements ShouldQueue
             logger()->info('PB: limiting photos for debug', ['max' => (int) $this->options['max_photos']]);
         }
 
+        $updateProgress(20, 'Probing image dimensions...');
         $t = microtime(true);
         $photos = $probe->fillDimensions($photos);
         $withDims = 0;
@@ -154,6 +170,7 @@ class BuildPhotoBook implements ShouldQueue
             'secs' => round(microtime(true) - $t, 2),
             'mem_mb' => round(memory_get_usage(true) / 1048576, 1),
         ]);
+        $updateProgress(30, 'Probed ' . $withDims . '/' . count($photos) . ' images');
         usort($photos, function($a,$b) {
             $ta = $a->takenAt?->getTimestamp() ?? PHP_INT_MIN;
             $tb = $b->takenAt?->getTimestamp() ?? PHP_INT_MIN;
@@ -162,6 +179,7 @@ class BuildPhotoBook implements ShouldQueue
 
         // Optional dedupe burst by pHash within small time windows
     if (config('photobook.ml.enable') && config('photobook.ml.phash') && \Illuminate\Support\Facades\Schema::hasTable('photo_features')) {
+            $updateProgress(35, 'Removing duplicate photos...');
             $featRepo = app(FeatureRepository::class);
             $paths = array_map(fn($p)=>$p->path, $photos);
             $features = $featRepo->getMany($paths);
@@ -193,6 +211,7 @@ class BuildPhotoBook implements ShouldQueue
 
         $useV2 = (bool) ($this->options['v2'] ?? true);
         if ($useV2) {
+            $updateProgress(40, 'Grouping photos into pages...');
             $t = microtime(true);
             $groups = $grouper->group($photos, 4);
             $pages = [];
@@ -307,6 +326,7 @@ class BuildPhotoBook implements ShouldQueue
                 'secs' => round(microtime(true) - $t, 2),
                 'mem_mb' => round(memory_get_usage(true) / 1048576, 1),
             ]);
+            $updateProgress(50, 'Planned ' . count($pages) . ' pages');
         } else {
             $t = microtime(true);
             $pages = $planner->plan($photos, $this->options);
@@ -385,12 +405,10 @@ class BuildPhotoBook implements ShouldQueue
             logger()->debug('PB: overrides merge skipped', ['err' => $e->getMessage()]);
         }
 
+        $updateProgress(60, 'Applying editor overrides...');
+
         $t = microtime(true);
-        // Update progress pre-render
-        try {
-            $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
-            @file_put_contents($cacheRoot . DIRECTORY_SEPARATOR . 'task.status.json', json_encode(['state'=>'rendering','progress'=>75, 'step' => 'Rendering pages...']));
-        } catch (\Throwable $e) {}
+        $updateProgress(70, 'Rendering ' . count($pages) . ' pages to HTML...');
         [$html, $assetsDir] = $builder->render($pages, $this->options);
         logger()->info('PB: builder rendered', [
             'html_kb' => round(strlen($html) / 1024, 1),
@@ -401,12 +419,28 @@ class BuildPhotoBook implements ShouldQueue
 
         $name = 'book-' . now()->format('Ymd-His') . '.pdf';
         $t = microtime(true);
-        // Update progress pre-PDF
-        try {
-            $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
-            @file_put_contents($cacheRoot . DIRECTORY_SEPARATOR . 'task.status.json', json_encode(['state'=>'pdf','progress'=>90, 'step' => 'Generating PDF...']));
-        } catch (\Throwable $e) {}
-        $pdf->renderTo($name, $html, $paper, $orientation, $dpi);
+        $updateProgress(85, 'Generating PDF (this may take a moment)...');
+
+        // Load persisted print settings from JSON file (not just config, which doesn't persist to queue worker)
+        $persistedSettings = [];
+        $settingsPath = storage_path('app/photobook-settings.json');
+        if (is_file($settingsPath)) {
+            $persistedSettings = json_decode(file_get_contents($settingsPath), true) ?: [];
+        }
+        $persistedPrint = $persistedSettings['print'] ?? [];
+
+        // Build print options for renderer - persisted settings override config
+        $printConfig = config('photobook.print', []);
+        $printOptions = [
+            'enabled' => (bool) ($persistedPrint['enabled'] ?? $printConfig['enabled'] ?? false) || !empty($this->options['print_mode']),
+            'bleed_mm' => (float) ($persistedPrint['bleed_mm'] ?? $printConfig['bleed_mm'] ?? 3.0),
+            'crop_marks' => (bool) ($persistedPrint['crop_marks'] ?? $printConfig['crop_marks'] ?? true),
+            'spine_margin_mm' => (float) ($persistedPrint['spine_margin_mm'] ?? $printConfig['spine_margin_mm'] ?? 10.0),
+        ];
+        
+        logger()->info('PB: print options', $printOptions);
+
+        $pdf->renderTo($name, $html, $paper, $orientation, $dpi, $printOptions);
         $renderSecs = round(microtime(true) - $t, 2);
 
         $peak = round(memory_get_peak_usage(true) / 1048576, 1);
@@ -414,11 +448,9 @@ class BuildPhotoBook implements ShouldQueue
             'render_secs' => $renderSecs,
             'total_secs' => round(microtime(true) - $jobStart, 2),
             'mem_peak_mb' => $peak,
+            'print_mode' => $printOptions['enabled'],
         ]);
-        try {
-            $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
-            @file_put_contents($cacheRoot . DIRECTORY_SEPARATOR . 'task.status.json', json_encode(['state'=>'finished','progress'=>100,'step'=>'Complete','finishedAt'=>date(DATE_ATOM)]));
-        } catch (\Throwable $e) {}
+        $updateProgress(100, 'Complete! PDF saved as ' . $name, 'finished');
     }
 
     private function normalizeCoverOptions(array $options, array $coverMeta): array

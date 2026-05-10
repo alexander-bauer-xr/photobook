@@ -37,6 +37,11 @@
     $fontFamilyResolved = isset($fontFamily) && is_string($fontFamily) && trim($fontFamily) !== ''
         ? trim($fontFamily)
         : 'Inter';
+
+    // Print mode settings
+    $printMode = $printMode ?? false;
+    $bleedMm = $bleedMm ?? '0';
+    $showCropMarks = $showCropMarks ?? false;
 @endphp
 
 <div class="page cover-page">
@@ -60,6 +65,21 @@
             <div class="cover-date">{{ $dateText }}</div>
         @endif
     </div>
+
+    {{-- Crop marks for print-ready mode --}}
+    @if($showCropMarks)
+        <div class="crop-marks">
+            <div class="crop-mark h top-left-h"></div>
+            <div class="crop-mark v top-left-v"></div>
+            <div class="crop-mark h top-right-h"></div>
+            <div class="crop-mark v top-right-v"></div>
+            <div class="crop-mark h bottom-left-h"></div>
+            <div class="crop-mark v bottom-left-v"></div>
+            <div class="crop-mark h bottom-right-h"></div>
+            <div class="crop-mark v bottom-right-v"></div>
+        </div>
+        <div class="print-info">Cover</div>
+    @endif
 </div>
 
 <style>
@@ -73,9 +93,10 @@
 
 .cover-top {
     position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
+    /* In print mode, extend into bleed area */
+    top: {{ $printMode ? '-' . $bleedMm . 'mm' : '0' }};
+    left: {{ $printMode ? '-' . $bleedMm . 'mm' : '0' }};
+    right: {{ $printMode ? '-' . $bleedMm . 'mm' : '0' }};
     bottom: 35.1%;
     overflow: hidden;
     background: #111827;
