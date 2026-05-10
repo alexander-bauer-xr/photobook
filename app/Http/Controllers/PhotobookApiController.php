@@ -753,6 +753,111 @@ class PhotobookApiController extends Controller
         return $payload;
     }
 
+    /**
+     * Load persisted settings from JSON file, merged with defaults
+     */
+    private function loadPersistedSettings(): array
+    {
+        $settingsPath = storage_path('app/photobook-settings.json');
+        $persisted = [];
+        if (is_file($settingsPath)) {
+            $persisted = json_decode(file_get_contents($settingsPath), true) ?: [];
+        }
+        return $persisted;
+    }
+
+    /**
+     * GET /api/photobook/settings
+     * Return current app settings for the frontend
+     */
+    public function getSettings()
+    {
+        // Load persisted settings (overrides config defaults)
+        $persisted = $this->loadPersistedSettings();
+        $print = $persisted['print'] ?? [];
+
+        return response()->json([
+            'ok' => true,
+            'settings' => [
+                'paper' => config('photobook.paper', 'a4'),
+                'orientation' => config('photobook.orientation', 'landscape'),
+                'dpi' => (int) config('photobook.dpi', 150),
+                'page_frame_mm' => (float) config('photobook.page_frame_mm', 6),
+                'page_gap_mm' => (float) config('photobook.page_gap_mm', 2.5),
+                'print' => [
+                    'enabled' => (bool) ($print['enabled'] ?? config('photobook.print.enabled', false)),
+                    'bleed_mm' => (float) ($print['bleed_mm'] ?? config('photobook.print.bleed_mm', 3.0)),
+                    'crop_marks' => (bool) ($print['crop_marks'] ?? config('photobook.print.crop_marks', true)),
+                    'spine_margin_mm' => (float) ($print['spine_margin_mm'] ?? config('photobook.print.spine_margin_mm', 10.0)),
+                    'safe_zone_mm' => (float) ($print['safe_zone_mm'] ?? config('photobook.print.safe_zone_mm', 5.0)),
+                ],
+                'cover' => [
+                    'title' => config('photobook.cover.title', ''),
+                    'subtitle' => config('photobook.cover.subtitle', ''),
+                    'show_date' => (bool) config('photobook.cover.show_date', true),
+                ],
+                'nextcloud' => [
+                    'configured' => !empty(config('filesystems.disks.nextcloud.baseUri')),
+                ],
+            ],
+        ]);
+    }
+
+    /**
+     * POST /api/photobook/settings
+     * Update settings (persists to JSON file for cross-request/queue persistence)
+     */
+    public function updateSettings(Request $req)
+    {
+        $settings = $req->input('settings', []);
+        $updated = [];
+        
+        // Load existing settings
+        $settingsPath = storage_path('app/photobook-settings.json');
+        $current = [];
+        if (is_file($settingsPath)) {
+            $current = json_decode(file_get_contents($settingsPath), true) ?: [];
+        }
+
+        // Update print settings
+        if (isset($settings['print']) && is_array($settings['print'])) {
+            if (!isset($current['print'])) {
+                $current['print'] = [];
+            }
+            
+            if (isset($settings['print']['enabled'])) {
+                $current['print']['enabled'] = (bool) $settings['print']['enabled'];
+                $updated['print.enabled'] = $current['print']['enabled'];
+            }
+            if (isset($settings['print']['bleed_mm'])) {
+                $current['print']['bleed_mm'] = (float) $settings['print']['bleed_mm'];
+                $updated['print.bleed_mm'] = $current['print']['bleed_mm'];
+            }
+            if (isset($settings['print']['crop_marks'])) {
+                $current['print']['crop_marks'] = (bool) $settings['print']['crop_marks'];
+                $updated['print.crop_marks'] = $current['print']['crop_marks'];
+            }
+            if (isset($settings['print']['spine_margin_mm'])) {
+                $current['print']['spine_margin_mm'] = (float) $settings['print']['spine_margin_mm'];
+                $updated['print.spine_margin_mm'] = $current['print']['spine_margin_mm'];
+            }
+            if (isset($settings['print']['safe_zone_mm'])) {
+                $current['print']['safe_zone_mm'] = (float) $settings['print']['safe_zone_mm'];
+                $updated['print.safe_zone_mm'] = $current['print']['safe_zone_mm'];
+            }
+        }
+
+        // Save to file
+        file_put_contents($settingsPath, json_encode($current, JSON_PRETTY_PRINT));
+        
+        // Also update runtime config for current request
+        foreach ($updated as $key => $value) {
+            config(['photobook.' . $key => $value]);
+        }
+
+        return response()->json(['ok' => true, 'updated' => $updated]);
+    }
+
     private function clampAlignComponent($value): float
     {
         $num = $this->floatValue($value, 0.0);

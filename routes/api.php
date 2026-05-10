@@ -15,4 +15,7 @@ Route::prefix('photobook')->group(function () {
     Route::post('/build-folder', [PhotobookApiController::class, 'startBuildByFolder']);
     Route::get('/progress/{hash}', [PhotobookApiController::class, 'progress']);
     Route::get('/templates', [PhotobookApiController::class, 'templates']);
+    // Settings API
+    Route::get('/settings', [PhotobookApiController::class, 'getSettings']);
+    Route::post('/settings', [PhotobookApiController::class, 'updateSettings']);
 });

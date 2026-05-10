@@ -10,6 +10,29 @@ return [
     'page_frame_mm' => (int) env('PHOTOBOOK_PAGE_FRAME_MM', 6),
     'page_gap_mm'   => (float) env('PHOTOBOOK_PAGE_GAP_MM', 2.5),
 
+    // === PRINT-READY SETTINGS ===
+    'print' => [
+        // Enable professional print mode (bleed, crop marks, binding margin)
+        'enabled' => (bool) env('PHOTOBOOK_PRINT_ENABLED', false),
+
+        // Bleed: extra area beyond trim edge that gets cut off (standard: 3mm)
+        'bleed_mm' => (float) env('PHOTOBOOK_PRINT_BLEED_MM', 3.0),
+
+        // Show crop/trim marks at corners for print alignment
+        'crop_marks' => (bool) env('PHOTOBOOK_PRINT_CROP_MARKS', true),
+
+        // Binding/spine margin for perfect binding (Klebebindung)
+        // Added to the inner edge of spreads to prevent content loss
+        'spine_margin_mm' => (float) env('PHOTOBOOK_PRINT_SPINE_MM', 10.0),
+
+        // Safety zone: keep important content this far from trim edge
+        'safe_zone_mm' => (float) env('PHOTOBOOK_PRINT_SAFE_ZONE_MM', 5.0),
+
+        // Color profile hint (informational - actual conversion requires post-processing)
+        // Options: 'srgb' (screen), 'cmyk' (print - requires Ghostscript conversion)
+        'color_profile' => env('PHOTOBOOK_PRINT_COLOR', 'srgb'),
+    ],
+
     // Image/PDF optimization & rendering
     'optimize' => [
         // Resize cached images so Dompdf embeds smaller bitmaps

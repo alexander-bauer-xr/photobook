@@ -5,6 +5,7 @@ import EditorCanvas from './components/EditorCanvas';
 import Sidebar from './components/Sidebar';
 import ReplaceDrawer from './components/ReplaceDrawer';
 import PdfReadyModal from './components/PdfReadyModal';
+import SettingsPanel from './components/SettingsPanel';
 import { api } from './api/client';
 import { useTemplates } from './hooks/useTemplates';
 import { PB } from './lib/api';
@@ -99,6 +100,7 @@ function Root() {
   const [feedbackSending, setFeedbackSending] = useState(false);
   const [feedbackSuccess, setFeedbackSuccess] = useState<string | null>(null);
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const clearFeedbackTimer = () => {
     if (feedbackTimer.current) {
       window.clearTimeout(feedbackTimer.current);
@@ -675,6 +677,13 @@ function Root() {
             await save();
           }} disabled={!canEditPage}>{pageIdx === 0 ? 'Save cover' : 'Save'}</button>
           <button
+            className="px-3 py-1 rounded bg-neutral-100 text-neutral-700 border border-neutral-300 hover:bg-neutral-200"
+            onClick={() => setSettingsOpen(true)}
+            title="Settings"
+          >
+            ⚙️ Settings
+          </button>
+          <button
             className="px-3 py-1 rounded bg-green-600 text-white disabled:opacity-60"
             disabled={!folder || isBuilding}
             onClick={async () => {
@@ -972,6 +981,7 @@ function Root() {
       {latestPdfUrl && (
         <PdfReadyModal url={latestPdfUrl} onClose={() => setLatestPdfUrl(null)} />
       )}
+      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }
