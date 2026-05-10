@@ -375,9 +375,66 @@ Phase 9 (DB)         → alles andere fertig
 
 ---
 
-## Versions-Hinweis
+## Versionsstand
 
-Das Repo läuft noch auf **Laravel 12.22.1** — v2 zielt auf **Laravel 13**.  
+- **Laravel 13.8.0** auf PHP 8.3.31 — bereits installiert auf `refactor`-Branch
+- **Python 3.12** — opencv-contrib-python-headless, imagehash, Pillow, numpy, scipy installiert system-wide
+
+---
+
+## Aktueller Stand (10. Mai 2026)
+
+### Commits auf `refactor`-Branch
+
+| Commit | Phase | Inhalt |
+|---|---|---|
+| `a0fbbc0` | Phase 0 | Laravel 13 base install + env config |
+| `7856304` | Phase 1 | Python Sidecar als `photobook_ai` Package |
+
+### Phase 1 — abgeschlossen ✅
+
+`python/photobook_ai/` läuft und produziert korrektes JSON-Output:
+```bash
+cd python && python3 -m photobook_ai.cli analyze --input foto.jpg --output features.json
+```
+
+Output-Schema verifiziert: `faces`, `saliency`, `suggested_crop`, `quality`, `phash`, `analysis_version: "v2.0"` ✅
+
+`.gitignore` um `python/.venv/` und `__pycache__/` erweitert ✅
+
+---
+
+## Nächste Session — Einstiegspunkt: Phase 2
+
+**Phase 2 — DB Schema erweitern**
+
+Erstelle folgende Migration:
+```
+database/migrations/2026_05_10_000001_add_v2_columns_to_photo_features_table.php
+```
+
+Neue Spalten:
+```php
+$table->json('suggested_crop')->nullable();
+$table->json('dominant_colors')->nullable();
+$table->string('analysis_version', 10)->default('v1');
+$table->timestamp('analyzed_at')->nullable();
+```
+
+Dann `app/Models/PhotoFeature.php` und `app/Services/FeatureRepository.php` updaten.
+
+**Beachten:** Die originale `photo_features`-Migration aus `main` muss zuerst portiert werden (sie existiert in der frischen Laravel-13-Instanz noch nicht).
+
+Originale Migration auf `main`: `database/migrations/2025_08_13_000000_create_photo_features_table.php`
+
+Einfach kopieren per:
+```bash
+git show main:database/migrations/2025_08_13_000000_create_photo_features_table.php > database/migrations/2025_08_13_000000_create_photo_features_table.php
+git show main:app/Models/PhotoFeature.php > app/Models/PhotoFeature.php
+git show main:app/Services/FeatureRepository.php > app/Services/FeatureRepository.php
+```
+
+Dann die neue Migration darauf aufbauen.
 React 19.2.6 (latest stable), TypeScript 5.9, Vite 7 — alles aktuell.  
 Playwright wird als `devDependency` + `dependency` (für den Node-Runner) hinzugefügt.
 
