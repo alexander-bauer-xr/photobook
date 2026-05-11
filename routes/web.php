@@ -14,7 +14,6 @@ Route::get('/photobook/templates',    [PhotobookController::class, 'templates'])
 Route::get('/photobook/candidates',   [PhotobookController::class, 'candidates']);
 Route::post('/photobook/override',    [PhotobookController::class, 'overrideTemplate']);
 Route::post('/photobook/save-page',   [PhotobookController::class, 'savePage']);
-Route::post('/photobook/feedback',    [PhotobookController::class, 'feedback']);
 Route::get('/photobook/asset/{hash}/{path}',
     [PhotobookController::class, 'asset'])
     ->where('path', '.*')

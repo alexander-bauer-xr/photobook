@@ -154,6 +154,17 @@ class WebDavClient
         return ['bytes' => '', 'etag' => null, 'status' => $status];
     }
 
+    /**
+     * Download a file from Nextcloud by its relative path and return the raw bytes.
+     */
+    public function download(string $path): string
+    {
+        $path = ltrim($path, '/');
+        $encoded = preg_replace_callback('/[^A-Za-z0-9\/_\.\-]/', fn($m) => rawurlencode($m[0]), $path);
+        $res = $this->http->request('GET', $encoded);
+        return (string) $res->getBody();
+    }
+
     private function hrefToRelativePath(string $href): string
     {
         // e.g. /nextcloud/remote.php/dav/files/alix/Alben/%231/photo.jpg
