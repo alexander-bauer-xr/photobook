@@ -9,17 +9,6 @@ import SettingsPanel from './components/SettingsPanel';
 import { api } from './api/client';
 import { useTemplates } from './hooks/useTemplates';
 import { PB } from './lib/api';
-// Using dynamic page typing to allow merged overrides shape
-
-const FEEDBACK_ACTIONS = [
-  { value: 'like', label: 'Like' },
-  { value: 'dislike', label: 'Dislike' },
-  { value: 'faces-cropped', label: 'Faces Cropped' },
-  { value: 'too-repetitive', label: 'Too Repetitive' },
-  { value: 'low-confidence', label: 'Low Confidence' },
-] as const;
-
-const DEFAULT_FEEDBACK_ACTION = FEEDBACK_ACTIONS[0]?.value ?? 'like';
 
 const qc = new QueryClient();
 
@@ -50,7 +39,10 @@ function Root() {
   const [buildProgress, setBuildProgress] = useState(0);
   const [buildMessage, setBuildMessage] = useState('');
   const [latestPdfUrl, setLatestPdfUrl] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const coverItemRef = useRef<any>(null);
+  const progressTimer = useRef<number | null>(null);
   const buildCoverPersistencePayload = (imageRel: string | null, opts?: { item?: any }) => {
     if (!imageRel) return null;
     const normalizedTitle = (coverTitle || '').trim();
@@ -93,20 +85,7 @@ function Root() {
     }
     return payload;
   };
-  const progressTimer = useRef<number | null>(null);
-  const feedbackTimer = useRef<number | null>(null);
-  const [feedbackAction, setFeedbackAction] = useState<(typeof FEEDBACK_ACTIONS)[number]['value']>(DEFAULT_FEEDBACK_ACTION);
-  const [feedbackReason, setFeedbackReason] = useState('');
-  const [feedbackSending, setFeedbackSending] = useState(false);
-  const [feedbackSuccess, setFeedbackSuccess] = useState<string | null>(null);
-  const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const clearFeedbackTimer = () => {
-    if (feedbackTimer.current) {
-      window.clearTimeout(feedbackTimer.current);
-      feedbackTimer.current = null;
-    }
-  };
   const templatesQ = useTemplates();
   useEffect(() => { api.getAlbums().then(r => setAlbums(r?.albums || [])).catch(() => { }); }, []);
   useEffect(() => {
@@ -117,7 +96,6 @@ function Root() {
       if (first) setFolder(first.folder || first.hash);
     }
   }, [albums]);
-  useEffect(() => () => { clearFeedbackTimer(); }, []);
   const { pagesQ: q, pages } = usePages(folder);
   // Build a web URL for cached assets from an absolute path like .../_cache/<hash>/<rel>
   const filePathToAssetUrl = (p?: string | null): string | null => {
@@ -348,63 +326,30 @@ function Root() {
     };
   }, [coverTitle, coverSubtitle, coverDateText, coverShowDate, coverWebSrc, coverPath, coverPhotoPath]);
 
-  useEffect(() => {
-    clearFeedbackTimer();
-    setFeedbackAction(DEFAULT_FEEDBACK_ACTION);
-    setFeedbackReason('');
-    setFeedbackSuccess(null);
-    setFeedbackError(null);
-    setFeedbackSending(false);
-  }, [pageIdx, page?.n]);
-
   const currentAlbum = useMemo(() => albums.find(a => (a.folder || a.hash) === folder) || null, [albums, folder]);
   const albumHash = currentAlbum?.hash || '';
-  const canSubmitFeedback = pageIdx > 0 && !!page;
-  const handleFeedbackSubmit = async (event?: React.FormEvent<HTMLFormElement>) => {
-    if (event) event.preventDefault();
-    if (!canSubmitFeedback || !page) return;
 
-    const action = feedbackAction || DEFAULT_FEEDBACK_ACTION;
-    const pageNumber = Number(page?.n ?? 0);
-    if (!Number.isFinite(pageNumber) || pageNumber <= 0) {
-      clearFeedbackTimer();
-      setFeedbackError('Feedback requires a valid interior page');
-      setFeedbackSuccess(null);
-      return;
-    }
-
-    const reason = feedbackReason.trim();
-
-    setFeedbackSending(true);
+  const handleExportPdf = async () => {
+    if (!albumHash) return;
+    setIsExporting(true);
+    setExportError(null);
     try {
-      const result = await api.submitFeedback({
-        folder,
-        page: pageNumber,
-        action,
-        ...(reason ? { reason } : {}),
-      });
-      if (!result?.ok) {
-        throw new Error('Feedback was not accepted');
+      const r = await PB.exportPdf(albumHash);
+      if (r.ok && r.url) {
+        setLatestPdfUrl(r.url);
+      } else {
+        setExportError(r.error || 'Export failed');
       }
-      clearFeedbackTimer();
-      setFeedbackSuccess('Feedback sent');
-      setFeedbackError(null);
-      setFeedbackReason('');
-      feedbackTimer.current = window.setTimeout(() => {
-        setFeedbackSuccess(null);
-        feedbackTimer.current = null;
-      }, 3000);
-    } catch (err) {
-      clearFeedbackTimer();
-      const message = err instanceof Error ? err.message : 'Failed to send feedback';
-      setFeedbackError(message || 'Failed to send feedback');
-      setFeedbackSuccess(null);
+    } catch (e) {
+      setExportError(e instanceof Error ? e.message : 'Export failed');
     } finally {
-      setFeedbackSending(false);
+      setIsExporting(false);
     }
   };
+
   const isLoading = q.isLoading;
   const isError = q.isError;
+  const hasPages = Array.isArray(displayPages) && displayPages.length > 0 && !isError;
   const hasPage = !!page;
   const canEditPage = hasPage && !isLoading && !isError;
   const pageLabel = pageIdx === 0 ? 'Cover' : (page ? `Page ${page.n}` : `Page ${pageIdx + 1}`)
@@ -599,388 +544,401 @@ function Root() {
     setDrawerOpen(false);
     setPageVersion(v => v + 1);
   };
-  return (
-    <div className="h-screen flex">
-      <main className="flex-1 p-4 flex flex-col gap-3">
-        <header className="flex items-center gap-3">
-          <input className="border border-neutral-300 rounded px-2 py-1" value={folder} onChange={e => setFolder(e.target.value)} placeholder="Folder" />
-          <button className="px-3 py-1 bg-neutral-800 text-white rounded" onClick={() => q.refetch()}>Load</button>
-          <select aria-label="Albums" className="border border-neutral-300 rounded px-2 py-1" value={folder} onChange={e => { setFolder(e.target.value); setPageIdx(0); }}>
-            <option value="">Select album…</option>
-            {albums.map(a => (
-              <option key={a.hash} value={a.folder || a.hash}>{(a.folder || a.hash)} ({a.count})</option>
-            ))}
-          </select>
-          <div className="flex items-center gap-2 ml-6">
-            <button disabled={pageIdx <= 0} className="px-3 py-1 rounded bg-neutral-200 disabled:opacity-50" onClick={() => setPageIdx(p => Math.max(0, p - 1))}>Prev</button>
-            <div className="text-sm">{pageLabel}</div>
-            <button disabled={displayPages.length <= pageIdx + 1} className="px-3 py-1 rounded bg-neutral-200 disabled:opacity-50" onClick={() => setPageIdx(p => p + 1)}>Next</button>
-          </div>
-          <form className="ml-auto flex items-center gap-2 border-l border-neutral-200 pl-3" onSubmit={handleFeedbackSubmit}>
-            <span className="text-sm text-neutral-600">Feedback</span>
-            <select
-              aria-label="Feedback action"
-              className="border border-neutral-300 rounded px-2 py-1 text-sm disabled:opacity-50"
-              value={feedbackAction}
-              onChange={e => setFeedbackAction(e.target.value as (typeof FEEDBACK_ACTIONS)[number]['value'])}
-              disabled={!canSubmitFeedback || feedbackSending}
-            >
-              {FEEDBACK_ACTIONS.map(opt => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
-            <input
-              className="border border-neutral-300 rounded px-2 py-1 text-sm w-48 disabled:opacity-50"
-              type="text"
-              placeholder="Optional note"
-              value={feedbackReason}
-              onChange={e => setFeedbackReason(e.target.value)}
-              disabled={!canSubmitFeedback || feedbackSending}
-            />
-            <button
-              type="submit"
-              className="px-3 py-1 rounded bg-neutral-200 text-sm disabled:opacity-50"
-              disabled={!canSubmitFeedback || feedbackSending}
-            >
-              {feedbackSending ? 'Sending…' : 'Send'}
-            </button>
-            {feedbackSuccess && <span className="text-xs text-green-600">{feedbackSuccess}</span>}
-            {feedbackError && !feedbackSuccess && <span className="text-xs text-red-600">{feedbackError}</span>}
-          </form>
-          <button className="px-3 py-1 rounded bg-blue-600 text-white ml-3" onClick={async () => {
-            if (pageIdx === 0) {
-              const hasAlbumHash = !!(albumHash && /^[a-f0-9]{40}$/i.test(albumHash));
-              if (!hasAlbumHash) {
-                alert('Cover can only be saved once the album has been initialized (build at least once).');
-                return;
-              }
-              const coverImageRel = coverPath || webAssetRelFromUrl(coverWebSrc) || null;
-              if (!coverImageRel) {
-                alert('Choose a cover photo before saving.');
-                return;
-              }
-              const itemForPayload = coverItemRef.current ?? (page?.items?.[0] ?? null);
-              const coverPayload = buildCoverPersistencePayload(coverImageRel, { item: itemForPayload });
-              if (!coverPayload) {
-                alert('Unable to build cover payload for saving.');
-                return;
-              }
-              try {
-                await PB.setCover(albumHash, coverPayload);
-                alert('Saved cover');
-              } catch (err) {
-                console.warn('Failed to persist cover metadata', err);
-                alert('Failed to save cover');
-              }
-              return;
+
+  const handleBuild = async () => {
+    if (!folder) return;
+    const hasAlbumHash = !!(albumHash && /^[a-f0-9]{40}$/i.test(albumHash));
+    const coverImageRelForApi = coverPath || webAssetRelFromUrl(coverWebSrc) || null;
+    const coverPayloadForApi = buildCoverPersistencePayload(coverImageRelForApi, { item: coverItemRef.current });
+
+    try {
+      if (hasAlbumHash && coverPayloadForApi) {
+        try {
+          await PB.setCover(albumHash, coverPayloadForApi);
+        } catch {}
+      }
+
+      setIsBuilding(true);
+      setBuildProgress(0);
+      setBuildMessage('Starting…');
+
+      const payload: Record<string, string> = { folder };
+      if (coverTitle) payload.title = coverTitle;
+      if (coverImageRelForApi) payload.cover_image = coverImageRelForApi;
+
+      const trimmedSubtitle = (coverSubtitle || '').trim();
+      const trimmedDate = (coverDateText || '').trim();
+      if (trimmedSubtitle) payload.cover_subtitle = trimmedSubtitle;
+      if (trimmedDate) payload.cover_date = trimmedDate;
+      payload.cover_show_date = coverShowDate ? '1' : '0';
+
+      let buildHash = albumHash;
+      if (hasAlbumHash) {
+        await PB.build(albumHash, payload);
+      } else {
+        const response = await PB.buildByFolder(payload);
+        buildHash = response?.hash || '';
+      }
+
+      if (progressTimer.current) {
+        window.clearInterval(progressTimer.current);
+        progressTimer.current = null;
+      }
+
+      const pollHash = buildHash;
+      progressTimer.current = window.setInterval(async () => {
+        try {
+          const response: any = await PB.progress(pollHash);
+          const progress = response?.status?.progress ?? 0;
+          const message = response?.status?.step || response?.status?.state || '';
+          setBuildProgress(progress);
+          setBuildMessage(message);
+
+          if (progress >= 100 || response?.status?.state === 'finished') {
+            if (progressTimer.current) {
+              window.clearInterval(progressTimer.current);
+              progressTimer.current = null;
             }
-            await save();
-          }} disabled={!canEditPage}>{pageIdx === 0 ? 'Save cover' : 'Save'}</button>
-          <button
-            className="px-3 py-1 rounded bg-neutral-100 text-neutral-700 border border-neutral-300 hover:bg-neutral-200"
-            onClick={() => setSettingsOpen(true)}
-            title="Settings"
-          >
-            ⚙️ Settings
-          </button>
-          <button
-            className="px-3 py-1 rounded bg-green-600 text-white disabled:opacity-60"
-            disabled={!folder || isBuilding}
-            onClick={async () => {
-              if (!folder) {
-                alert('Select a folder to build');
-                return;
-              }
-              const hasAlbumHash = !!(albumHash && /^[a-f0-9]{40}$/i.test(albumHash));
-              const coverImageRelForApi = coverPath || webAssetRelFromUrl(coverWebSrc) || null;
-              const coverPayloadForApi = buildCoverPersistencePayload(coverImageRelForApi, { item: coverItemRef.current });
-              try {
-                // Persist cover via REST if available and albumHash exists
-                if (hasAlbumHash && coverPayloadForApi) {
-                  try { await PB.setCover(albumHash, coverPayloadForApi); } catch { }
-                }
+            setIsBuilding(false);
+            setBuildMessage('');
+            q.refetch();
+          }
+        } catch {
+          if (progressTimer.current) {
+            window.clearInterval(progressTimer.current);
+            progressTimer.current = null;
+          }
+          setIsBuilding(false);
+          setBuildMessage('');
+          q.refetch();
+        }
+      }, 1000);
+    } catch {
+      if (progressTimer.current) {
+        window.clearInterval(progressTimer.current);
+        progressTimer.current = null;
+      }
+      setIsBuilding(false);
+      setBuildMessage('Build failed to start');
+    }
+  };
 
-                setIsBuilding(true); setBuildProgress(0); setBuildMessage('Starting build...');
-
-                // Build payload
-                const payload: Record<string, string> = { folder };
-                if (coverTitle) payload.title = coverTitle;
-                if (coverImageRelForApi) payload.cover_image = coverImageRelForApi;
-                const trimmedSubtitle = (coverSubtitle || '').trim();
-                const trimmedDate = (coverDateText || '').trim();
-                if (trimmedSubtitle !== '') payload.cover_subtitle = trimmedSubtitle;
-                if (trimmedDate !== '') payload.cover_date = trimmedDate;
-                payload.cover_show_date = coverShowDate ? '1' : '0';
-
-                // Start build and determine which hash to poll
-                let buildHash = albumHash;
-                if (hasAlbumHash) {
-                  await PB.build(albumHash, payload);
-                } else {
-                  const r = await PB.buildByFolder(payload);
-                  buildHash = r?.hash || '';
-                }
-
-                setBuildMessage('Build started successfully');
-                if (progressTimer.current) { window.clearInterval(progressTimer.current); progressTimer.current = null; }
-                const pollHash = buildHash; // capture for closure
-                progressTimer.current = window.setInterval(async () => {
-                  try {
-                    const r: any = await PB.progress(pollHash);
-                    const p = r?.status?.progress ?? 0;
-                    const msg = r?.status?.step || r?.status?.message || r?.status?.state || '';
-                    setBuildProgress(p);
-                    setBuildMessage(msg);
-                      if (p >= 100) {
-                      if (progressTimer.current) { window.clearInterval(progressTimer.current); progressTimer.current = null; }
-                      setIsBuilding(false);
-                      setBuildMessage('Build complete!');
-                        try {
-                          // Ask backend for latest PDF URL
-                          const lr = await fetch('/photobook/latest-pdf.json', { credentials: 'same-origin' });
-                          if (lr.ok) {
-                            const j = await lr.json();
-                            const url = j?.ok && j?.url ? String(j.url) : null;
-                            if (url) {
-                              setLatestPdfUrl(url);
-                              // Attempt to open in a new tab as well (some browsers may block if not user-initiated)
-                              try { window.open(url, '_blank', 'noopener'); } catch {}
-                            }
-                          }
-                        } catch {}
-                        setTimeout(() => setBuildMessage(''), 2000);
-                      q.refetch();
-                    }
-                  } catch (e) {
-                    if (progressTimer.current) { window.clearInterval(progressTimer.current); progressTimer.current = null; }
-                    setIsBuilding(false);
-                    setBuildMessage('Build completed (progress unavailable)');
-                    try {
-                      const lr = await fetch('/photobook/latest-pdf.json', { credentials: 'same-origin' });
-                      if (lr.ok) {
-                        const j = await lr.json();
-                        const url = j?.ok && j?.url ? String(j.url) : null;
-                        if (url) {
-                          setLatestPdfUrl(url);
-                          try { window.open(url, '_blank', 'noopener'); } catch {}
-                        }
-                      }
-                    } catch {}
-                    setTimeout(() => setBuildMessage(''), 2000);
-                  }
-                }, 1000);
-
-              } catch (e) {
-                if (progressTimer.current) { window.clearInterval(progressTimer.current); progressTimer.current = null; }
-                setIsBuilding(false);
-                setBuildMessage('Build failed to start');
-                setTimeout(() => setBuildMessage(''), 2000);
-              }
-            }}
-          >{isBuilding ? `Building… ${Math.round(buildProgress)}%` : 'Build'}</button>
-        </header>
-        {isBuilding && (
-          <div className="-mt-2 mb-2 flex items-center gap-3 text-sm text-neutral-700">
-            <div className="w-64 h-2 bg-neutral-200 rounded overflow-hidden">
-              <div className="h-full bg-green-600" style={{ width: `${Math.max(0, Math.min(100, buildProgress))}%` }} />
+  return (
+    <div className="h-screen flex flex-col overflow-hidden bg-neutral-50">
+      {/* ── Build Overlay ───────────────────────────────────────────── */}
+      {isBuilding && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-2xl p-10 flex flex-col items-center gap-6 w-[480px] max-w-[90vw]">
+            <div className="text-2xl font-semibold text-neutral-800">Building Photobook…</div>
+            <div className="w-full">
+              <div className="flex justify-between text-xs text-neutral-500 mb-1">
+                <span>{buildMessage || 'Please wait'}</span>
+                <span>{Math.round(buildProgress)}%</span>
+              </div>
+              <div className="w-full h-3 bg-neutral-200 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-green-500 rounded-full transition-all duration-500"
+                  style={{ width: `${Math.max(2, Math.min(100, buildProgress))}%` }}
+                />
+              </div>
             </div>
-            <span>{buildMessage}</span>
+            <p className="text-sm text-neutral-500 text-center">
+              Photos are being downloaded, analysed and arranged into pages.<br />
+              This may take a few minutes.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ── Top bar ─────────────────────────────────────────────────── */}
+      <header className="flex-none flex items-center gap-3 px-4 py-2 bg-white border-b border-neutral-200 shadow-sm">
+        {/* Folder selector */}
+        <select
+          aria-label="Albums"
+          className="border border-neutral-300 rounded px-2 py-1 text-sm max-w-[220px]"
+          value={folder}
+          onChange={e => { setFolder(e.target.value); setPageIdx(0); }}
+        >
+          <option value="">Select album…</option>
+          {albums.map(a => (
+            <option key={a.hash} value={a.folder || a.hash}>{a.folder || a.hash} ({a.count})</option>
+          ))}
+        </select>
+        <input
+          className="border border-neutral-300 rounded px-2 py-1 text-sm w-52"
+          value={folder}
+          onChange={e => setFolder(e.target.value)}
+          placeholder="or type folder path…"
+        />
+
+        {/* Build button — always visible and prominent */}
+        <button
+          className="px-4 py-1.5 rounded-lg bg-green-600 text-white font-medium text-sm hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled={!folder || isBuilding}
+          onClick={handleBuild}
+          title={hasPages ? 'Rebuild from Nextcloud' : 'Generate pages from Nextcloud folder'}
+        >
+          {hasPages ? '↺ Rebuild' : '▶ Build'}
+        </button>
+
+        {/* Divider — only show editor controls when pages exist */}
+        {hasPages && (
+          <>
+            <div className="w-px h-6 bg-neutral-200 mx-1" />
+            {/* Page navigation */}
+            <button
+              disabled={pageIdx <= 0}
+              className="px-3 py-1 rounded bg-neutral-200 text-sm disabled:opacity-40"
+              onClick={() => setPageIdx(p => Math.max(0, p - 1))}
+            >← Prev</button>
+            <span className="text-sm text-neutral-700 min-w-[70px] text-center">{pageLabel}</span>
+            <button
+              disabled={displayPages.length <= pageIdx + 1}
+              className="px-3 py-1 rounded bg-neutral-200 text-sm disabled:opacity-40"
+              onClick={() => setPageIdx(p => p + 1)}
+            >Next →</button>
+
+            <div className="w-px h-6 bg-neutral-200 mx-1" />
+
+            {/* Save */}
+            <button
+              className="px-3 py-1.5 rounded bg-blue-600 text-white text-sm disabled:opacity-50"
+              disabled={!canEditPage}
+              onClick={async () => {
+                if (pageIdx === 0) {
+                  const coverImageRel = coverPath || webAssetRelFromUrl(coverWebSrc) || null;
+                  if (!coverImageRel) { alert('Choose a cover photo before saving.'); return; }
+                  const coverPayload = buildCoverPersistencePayload(coverImageRel, { item: coverItemRef.current ?? (page?.items?.[0] ?? null) });
+                  if (!coverPayload) { alert('Unable to build cover payload.'); return; }
+                  try { await PB.setCover(albumHash, coverPayload); alert('Saved cover'); }
+                  catch { alert('Failed to save cover'); }
+                } else {
+                  await save();
+                }
+              }}
+            >{pageIdx === 0 ? 'Save cover' : 'Save page'}</button>
+
+            {/* Export PDF */}
+            <button
+              className="px-3 py-1.5 rounded bg-neutral-700 text-white text-sm disabled:opacity-50"
+              disabled={isExporting || !albumHash}
+              onClick={handleExportPdf}
+              title="Export to PDF via Playwright"
+            >
+              {isExporting ? 'Exporting…' : 'Export PDF'}
+            </button>
+            {exportError && (
+              <span className="text-xs text-red-600">{exportError}</span>
+            )}
+          </>
+        )}
+
+        {/* Settings always accessible */}
+        <button
+          className="ml-auto px-3 py-1.5 rounded bg-neutral-100 text-neutral-600 border border-neutral-300 hover:bg-neutral-200 text-sm"
+          onClick={() => setSettingsOpen(true)}
+          title="Settings"
+        >⚙ Settings</button>
+      </header>
+
+      {/* ── Cover editor bar (only on page 0 after build) ──────────── */}
+      {hasPages && albumHash && pageIdx === 0 && (
+        <div className="flex-none px-4 py-2 bg-white border-b border-neutral-100 flex flex-wrap items-center gap-3">
+          <label className="text-sm text-neutral-600 w-14">Title</label>
+          <input
+            className="border border-neutral-300 rounded px-2 py-1 text-sm flex-1 min-w-[180px]"
+            value={coverTitle}
+            onChange={e => setCoverTitle(e.target.value)}
+            placeholder="Cover title"
+          />
+          <label className="text-sm text-neutral-600">Subheadline</label>
+          <input
+            className="border border-neutral-300 rounded px-2 py-1 text-sm flex-1 min-w-[180px]"
+            value={coverSubtitle}
+            onChange={e => setCoverSubtitle(e.target.value)}
+            placeholder="(optional)"
+          />
+          <label className="flex items-center gap-1.5 text-sm text-neutral-600 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={coverShowDate}
+              onChange={e => {
+                const next = e.target.checked;
+                setCoverShowDate(next);
+                if (next && !(coverDateText || '').trim()) setCoverDateText(defaultCoverDateText());
+              }}
+            />
+            Date
+          </label>
+          <input
+            className="border border-neutral-300 rounded px-2 py-1 text-sm w-44 disabled:opacity-40"
+            value={coverDateText}
+            onChange={e => setCoverDateText(e.target.value)}
+            placeholder="e.g. Summer 2025"
+            disabled={!coverShowDate}
+          />
+          <button
+            className="px-3 py-1 text-sm rounded bg-neutral-200 disabled:opacity-50"
+            disabled={!canEditPage}
+            onClick={() => openReplace(0)}
+          >Choose photo…</button>
+          {coverWebSrc && <img src={coverWebSrc} alt="cover" className="h-8 rounded border" />}
+        </div>
+      )}
+
+      {/* ── Main content area ───────────────────────────────────────── */}
+      <main className="flex-1 flex overflow-hidden">
+        {/* Empty / build-required state */}
+        {!hasPages && !isLoading && (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="flex flex-col items-center gap-6 text-center max-w-md">
+              <div className="text-6xl">📷</div>
+              <div>
+                <h1 className="text-2xl font-semibold text-neutral-800 mb-2">Photobook Editor</h1>
+                <p className="text-neutral-500 text-sm">
+                  {folder
+                    ? `No pages found for "${folder}". Start a build to generate the layout from your Nextcloud folder.`
+                    : 'Enter a Nextcloud folder path above or select an album, then click Build.'}
+                </p>
+              </div>
+              {folder && (
+                <button
+                  className="px-8 py-3 rounded-xl bg-green-600 text-white font-semibold text-lg hover:bg-green-700 disabled:opacity-50"
+                  disabled={isBuilding}
+                  onClick={handleBuild}
+                >
+                  ▶ Build Photobook
+                </button>
+              )}
+              {isError && (
+                <p className="text-xs text-red-500">
+                  Could not load pages — the folder may not have been built yet.
+                </p>
+              )}
+            </div>
           </div>
         )}
-        {albumHash && pageIdx === 0 && (
-          <div className="mt-2 flex flex-col gap-2">
-            <div className="flex items-center gap-2">
-              <label className="text-sm w-24">Title</label>
-              <input className="border border-neutral-300 rounded px-2 py-1 flex-1 min-w-[220px]" value={coverTitle} onChange={e => setCoverTitle(e.target.value)} placeholder="Cover title" />
-              <button className="px-3 py-1 rounded bg-neutral-200 disabled:opacity-50" disabled={!canEditPage} onClick={() => openReplace(0)}>Choose cover photo…</button>
-              {coverWebSrc ? <img src={coverWebSrc} alt="cover" className="h-10 rounded border" /> : <span className="text-xs text-neutral-500">No image</span>}
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="text-sm w-24">Subheadline</label>
-              <input
-                className="border border-neutral-300 rounded px-2 py-1 flex-1 min-w-[220px]"
-                value={coverSubtitle}
-                onChange={e => setCoverSubtitle(e.target.value)}
-                placeholder="Subheadline (optional)"
-              />
-            </div>
-            <div className="flex items-center gap-3">
-              <label className="text-sm w-24">Date</label>
-              <label className="flex items-center gap-2 text-sm text-neutral-700">
-                <input
-                  type="checkbox"
-                  className="accent-neutral-800"
-                  checked={coverShowDate}
-                  onChange={(e) => {
-                    const next = e.target.checked;
-                    setCoverShowDate(next);
-                    if (next && !(coverDateText || '').trim()) {
-                      setCoverDateText(defaultCoverDateText());
+
+        {/* Loading spinner */}
+        {isLoading && (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-sm text-neutral-500">Loading pages…</div>
+          </div>
+        )}
+
+        {/* Editor + Sidebar */}
+        {hasPages && (
+          <>
+            <div className="flex-1 flex items-center justify-center overflow-auto p-4">
+              {!page ? (
+                <div className="text-sm text-neutral-500">No page selected.</div>
+              ) : (
+                <EditorCanvas
+                  page={page}
+                  version={pageVersion}
+                  coverMeta={pageIdx === 0 ? coverMetaForEditor : undefined}
+                  onChange={(items) => {
+                    if (page) {
+                      page.items = items as any;
+                      setPageVersion(v => v + 1);
+                    }
+                    if (pageIdx === 0 && Array.isArray(items) && items.length) {
+                      const first = items[0] as any;
+                      const existing = coverItemRef.current ?? {};
+                      let photo = first?.photo ?? existing.photo ?? null;
+                      if ((!photo || !photo.path) && coverPhotoPath) {
+                        const fname = (coverPhotoPath.split('/') || []).pop() || undefined;
+                        photo = { path: coverPhotoPath, ...(fname ? { filename: fname } : {}) };
+                      }
+                      coverItemRef.current = { ...existing, ...(first ? { ...first } : {}), slotIndex: 0, photo };
                     }
                   }}
+                  onSave={async (items: any[]) => {
+                    if (!page) return;
+                    await api.savePage({
+                      folder,
+                      page: page.n,
+                      items: items.map((it: any) => {
+                        const fit = it.fit === 'contain' ? 'contain' : 'cover';
+                        const align = { x: clamp01(Number(it.align?.x ?? 0)), y: clamp01(Number(it.align?.y ?? 0)) };
+                        const offset = { x: Number(it.offset?.x) || 0, y: Number(it.offset?.y) || 0 };
+                        const zoom = isPos(it.zoom) ? Number(it.zoom) : 1;
+                        const rotation = Number.isFinite(Number(it.rotation)) ? Number(it.rotation) : 0;
+                        const objectPosition = `${Math.round(50 + align.x * 50)}% ${Math.round(50 + align.y * 50)}%`;
+                        const caption = typeof it.caption === 'string' ? it.caption : typeof it.caption === 'number' ? String(it.caption) : undefined;
+                        return {
+                          slotIndex: it.slotIndex,
+                          fit, align, offset, zoom, rotation, auto: !!it.auto,
+                          ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {}),
+                          ...(it.src ? { src: it.src } : {}),
+                          ...(caption !== undefined ? { caption } : {}),
+                          crop: fit, objectPosition, scale: zoom, rotate: rotation,
+                        };
+                      }),
+                      templateId: page.templateId || null,
+                    });
+                    alert('Saved page overrides');
+                  }}
                 />
-                <span>Show</span>
-              </label>
-              <input
-                className="border border-neutral-300 rounded px-2 py-1 flex-1 min-w-[220px] disabled:bg-neutral-100 disabled:text-neutral-500"
-                value={coverDateText}
-                onChange={e => setCoverDateText(e.target.value)}
-                placeholder="e.g. Summer 2025"
-                disabled={!coverShowDate}
-              />
+              )}
             </div>
-          </div>
-        )}
-
-        <div className="flex-1 flex gap-4 overflow-hidden">
-          <div className="flex-1 flex items-center justify-center overflow-auto">
-            {isLoading ? (
-              <div className="text-sm text-neutral-500">Loading pages…</div>
-            ) : isError ? (
-              <div className="text-sm text-red-600">Failed to load pages.json</div>
-            ) : !page ? (
-              <div className="text-sm text-neutral-500 text-center">
-                {folder ? `No pages.json yet. Folder: ${folder}` : 'Select an album to load pages.'}
-              </div>
-            ) : (
-              <EditorCanvas
-                page={page}
-                version={pageVersion}
-                coverMeta={pageIdx === 0 ? coverMetaForEditor : undefined}
-                onChange={(items) => {
-                  if (page) {
-                    page.items = items as any;
+            <Sidebar
+              page={page}
+              onSwap={swapItems}
+              onReplace={openReplace}
+              onUpdateItem={(idx, changes) => {
+                if (!page) return;
+                const existing = page.items?.[idx];
+                if (!existing) return;
+                page.items[idx] = { ...existing, ...changes };
+                setPageVersion(v => v + 1);
+              }}
+              onTemplateChange={async (tpl) => {
+                if (!page || pageIdx === 0) return;
+                try {
+                  const groups = templatesQ.data || {} as any;
+                  const count = Array.isArray(page.items) ? page.items.length : 0;
+                  const arr = (groups[String(count)] || groups[count] || []) as any[];
+                  const match = arr.find((t: any) => t.id === tpl);
+                  if (match && Array.isArray(match.slots)) {
+                    page.templateId = tpl;
+                    page.slots = match.slots.map((s: any) => ({ x: s.x, y: s.y, w: s.w, h: s.h, ...(s.ar ? { ar: s.ar } : {}) }));
+                    page.items = (page.items || []).map((it: any, i: number) => ({ ...it, slotIndex: i }));
+                    setPageVersion(v => v + 1);
+                  } else {
+                    page.templateId = tpl;
                     setPageVersion(v => v + 1);
                   }
-                  if (pageIdx === 0 && Array.isArray(items) && items.length) {
-                    const first = items[0] as any;
-                    const existing = coverItemRef.current ?? {};
-                    let photo = first?.photo ?? existing.photo ?? null;
-                    if ((!photo || !photo.path) && coverPhotoPath) {
-                      const fname = (coverPhotoPath.split('/') || []).pop() || undefined;
-                      photo = { path: coverPhotoPath, ...(fname ? { filename: fname } : {}) };
-                    }
-                    coverItemRef.current = {
-                      ...existing,
-                      ...(first ? { ...first } : {}),
-                      slotIndex: 0,
-                      photo,
-                    };
-                  }
-                }}
-                onSave={async (items: any[]) => {
-                  if (!page) return;
-                  await api.savePage({
-                    folder,
-                    page: page.n,
-                    items: items.map((it: any) => {
-                      const fit = it.fit === 'contain' ? 'contain' : 'cover';
-                      const align = { x: clamp01(Number(it.align?.x ?? 0)), y: clamp01(Number(it.align?.y ?? 0)) };
-                      const offset = { x: Number(it.offset?.x) || 0, y: Number(it.offset?.y) || 0 };
-                      const zoom = isPos(it.zoom) ? Number(it.zoom) : 1;
-                      const rotation = Number.isFinite(Number(it.rotation)) ? Number(it.rotation) : 0;
-                      const objectPosition = `${Math.round(50 + align.x * 50)}% ${Math.round(50 + align.y * 50)}%`;
-                      const caption =
-                        typeof it.caption === 'string'
-                          ? it.caption
-                          : typeof it.caption === 'number'
-                            ? String(it.caption)
-                            : undefined;
-
-                      return {
-                        slotIndex: it.slotIndex,
-
-                        // canonical
-                        fit, align, offset, zoom, rotation, auto: !!it.auto,
-                        ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {}),
-                        ...(it.src ? { src: it.src } : {}),
-                        ...(caption !== undefined ? { caption } : {}),
-
-                        // legacy
-                        crop: fit,
-                        objectPosition,
-                        scale: zoom,
-                        rotate: rotation,
-                      };
-                    }),
-                    templateId: page.templateId || null,
-                  });
-                  alert('Saved page overrides');
-                }}
-
-              />
-            )}
-          </div>
-          {isLoading ? (
-            <aside className="w-72 p-3 bg-white border-l border-neutral-200 flex items-center justify-center text-sm text-neutral-500">
-              Loading pages…
-            </aside>
-          ) : isError ? (
-            <aside className="w-72 p-3 bg-white border-l border-neutral-200 flex items-center justify-center text-sm text-red-600 text-center">
-              Unable to load pages.json.
-            </aside>
-          ) : !page ? (
-            <aside className="w-72 p-3 bg-white border-l border-neutral-200 flex items-center justify-center text-sm text-neutral-500 text-center">
-              {folder ? `No pages found for ${folder}.` : 'No page data yet.'}
-            </aside>
-          ) : (
-            <Sidebar page={page} onSwap={swapItems} onReplace={openReplace} onUpdateItem={(idx, changes) => {
-              if (!page) return;
-              const existing = page.items?.[idx];
-              if (!existing) return;
-              page.items[idx] = { ...existing, ...changes };
-              setPageVersion(v => v + 1);
-            }} onTemplateChange={async (tpl) => {
-              if (!page) return;
-              if (pageIdx === 0) return; // no template selection for cover
-              // Apply slots from selected template immediately in UI
-              try {
-                const groups = templatesQ.data || {} as any;
-                const count = Array.isArray(page.items) ? page.items.length : 0;
-                const arr = (groups[String(count)] || groups[count] || []) as any[];
-                const match = arr.find((t:any) => t.id === tpl);
-                if (match && Array.isArray(match.slots)) {
-                  page.templateId = tpl;
-                  // Replace slots with the chosen template's geometry
-                  page.slots = match.slots.map((s:any)=>({ x: s.x, y: s.y, w: s.w, h: s.h, ...(s.ar?{ ar: s.ar }: {}) }));
-                  // Reassign items' slotIndex to sequential indices matching new slots
-                  page.items = (page.items || []).map((it:any, i:number) => ({ ...it, slotIndex: i }));
-                  setPageVersion(v => v + 1);
-                } else {
-                  // Fallback: still set templateId so backend override persists
-                  page.templateId = tpl;
-                  setPageVersion(v => v + 1);
-                }
-              } catch {}
-              await api.overrideTemplate({ folder, page: page.n, templateId: tpl });
-              alert('Template set to ' + tpl);
-            }} />
-          )}
-        </div>
-        {drawerOpen && !canEditPage && (
-          <div className="fixed inset-0 z-50">
-            <div className="absolute inset-0 bg-black/40" onClick={() => setDrawerOpen(false)} />
-            <div className="absolute right-0 top-0 h-full w-[420px] bg-white shadow-xl border-l border-neutral-200 flex flex-col items-center justify-center gap-3 p-6 text-center">
-              <div className="text-sm text-neutral-700">
-                {isLoading ? 'Loading pages…' : isError ? 'Unable to load page data.' : 'No page data available.'}
-              </div>
-              <button className="px-3 py-1 text-sm rounded bg-neutral-200" onClick={() => setDrawerOpen(false)}>Close</button>
-            </div>
-          </div>
+                } catch { }
+                await api.overrideTemplate({ folder, page: page.n, templateId: tpl });
+                alert('Template set to ' + tpl);
+              }}
+            />
+          </>
         )}
-        <ReplaceDrawer
-          open={drawerOpen && canEditPage}
-          onClose={() => setDrawerOpen(false)}
-          loading={candLoading}
-          candidates={candidates}
-          onPick={(c, o) => applyReplacement(c, o)}
-          onLoadAll={loadAllCandidates}
-          showingAll={showingAllCandidates}
-        />
       </main>
-      {latestPdfUrl && (
-        <PdfReadyModal url={latestPdfUrl} onClose={() => setLatestPdfUrl(null)} />
+
+      <ReplaceDrawer
+        open={drawerOpen && canEditPage}
+        onClose={() => setDrawerOpen(false)}
+        loading={candLoading}
+        candidates={candidates}
+        onPick={(c, o) => applyReplacement(c, o)}
+        onLoadAll={loadAllCandidates}
+        showingAll={showingAllCandidates}
+      />
+      {drawerOpen && !canEditPage && (
+        <div className="fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setDrawerOpen(false)} />
+          <div className="absolute right-0 top-0 h-full w-[420px] bg-white shadow-xl border-l border-neutral-200 flex flex-col items-center justify-center gap-3 p-6 text-center">
+            <div className="text-sm text-neutral-700">
+              {isLoading ? 'Loading pages…' : isError ? 'Unable to load page data.' : 'No page data available.'}
+            </div>
+            <button className="px-3 py-1 text-sm rounded bg-neutral-200" onClick={() => setDrawerOpen(false)}>Close</button>
+          </div>
+        </div>
       )}
+      {latestPdfUrl && <PdfReadyModal url={latestPdfUrl} onClose={() => setLatestPdfUrl(null)} />}
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );

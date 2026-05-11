@@ -3,7 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Services\LayoutTemplates;
+use App\Services\PlaywrightPdfRenderer;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response as HttpResponse;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Response;
 use Illuminate\Support\Facades\Storage;
@@ -535,5 +537,51 @@ class PhotobookController extends Controller
         ));
         @file_put_contents($path, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         return response()->json(['ok' => true]);
+    }
+
+    // --------------------------------------------------------------------------
+    // POST /api/photobook/export/{hash}  — Playwright PDF export
+    // --------------------------------------------------------------------------
+
+    public function exportPdf(Request $request, string $hash)
+    {
+        $pagesPath = storage_path('app/pdf-exports/_cache/' . $hash) . DIRECTORY_SEPARATOR . 'pages.json';
+        if (!is_file($pagesPath)) {
+            return response()->json(['ok' => false, 'error' => 'pages.json not found — build first'], 404);
+        }
+
+        $outputDir = storage_path('app/pdf-exports');
+        if (!is_dir($outputDir)) @mkdir($outputDir, 0775, true);
+
+        $filename   = 'book-' . now()->format('Ymd-His') . '.pdf';
+        $outputPath = $outputDir . DIRECTORY_SEPARATOR . $filename;
+
+        $previewUrl = config('app.url') . '/photobook/preview/' . $hash;
+
+        try {
+            app(PlaywrightPdfRenderer::class)->render($previewUrl, $outputPath);
+        } catch (\Throwable $e) {
+            return response()->json(['ok' => false, 'error' => $e->getMessage()], 500);
+        }
+
+        return response()->json([
+            'ok'  => true,
+            'url' => '/photobook/pdf/' . rawurlencode($filename),
+        ]);
+    }
+
+    // --------------------------------------------------------------------------
+    // GET /photobook/pdf/{file}  — serve exported PDF
+    // --------------------------------------------------------------------------
+
+    public function servePdf(string $file)
+    {
+        // Sanitize: only allow alphanumeric + dash + dot filenames
+        if (!preg_match('/^[a-z0-9_\-]+\.pdf$/i', $file)) {
+            abort(400, 'Invalid filename');
+        }
+        $path = storage_path('app/pdf-exports/' . $file);
+        if (!is_file($path)) abort(404);
+        return response()->download($path, $file, ['Content-Type' => 'application/pdf']);
     }
 }

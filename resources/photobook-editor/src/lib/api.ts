@@ -43,6 +43,7 @@ export const PB = {
   build: (hash: string, payload: any) => api(`/api/photobook/build/${hash}`, { method: 'POST', body: JSON.stringify(payload) }),
   buildByFolder: (payload: any) => api(`/api/photobook/build-folder`, { method: 'POST', body: JSON.stringify(payload) }) as Promise<{ ok: boolean; status: string; hash: string }>,
   progress: (hash: string) => api(`/api/photobook/progress/${hash}`),
+  exportPdf: (hash: string) => api<{ ok: boolean; url?: string; error?: string }>(`/api/photobook/export/${hash}`, { method: 'POST' }),
   // Settings API
   getSettings: () => api<SettingsResponse>('/api/photobook/settings'),
   updateSettings: (settings: Partial<AppSettings>) => api<{ ok: boolean; updated: Record<string, any> }>('/api/photobook/settings', { method: 'POST', body: JSON.stringify({ settings }) }),

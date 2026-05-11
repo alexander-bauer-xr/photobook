@@ -12,6 +12,7 @@ Route::prefix('photobook')->group(function () {
     Route::post('/cover/{hash}',              [PhotobookController::class, 'setCover']);
     Route::post('/build/{hash}',              [PhotobookController::class, 'startBuild']);
     Route::post('/build-folder',              [PhotobookController::class, 'startBuildByFolder']);
+    Route::post('/export/{hash}',             [PhotobookController::class, 'exportPdf']);
     Route::get('/progress/{hash}',            [PhotobookController::class, 'progress']);
     Route::get('/settings',                   [PhotobookController::class, 'getSettings']);
     Route::post('/settings',                  [PhotobookController::class, 'updateSettings']);

@@ -24,6 +24,9 @@ Route::get('/photobook/preview/{hash}', function (string $hash) {
     return view('photobook.print', ['hash' => $hash]);
 })->name('photobook.preview');
 
+Route::get('/photobook/pdf/{file}', [PhotobookController::class, 'servePdf'])
+    ->where('file', '[^/]+\.pdf');
+
 // ── Photobook Editor UI ───────────────────────────────────────────────────────
 Route::get('/photobook', function () {
     return view('photobook.editor');
