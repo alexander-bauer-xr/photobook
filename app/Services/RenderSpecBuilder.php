@@ -29,7 +29,7 @@ class RenderSpecBuilder
             }
 
             $feature = $featMap[$path] ?? null;
-            $crop    = $feature?->suggested_crop;  // already cast to array by model
+            $crop    = $feature?->suggested_crop;
 
             if (is_array($crop) && isset($crop['align'], $crop['zoom'])) {
                 $specs[] = RenderSpec::fromSuggestedCrop($path, $slotId, $crop);

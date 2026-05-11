@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Photobook Print – {{ $hash }}</title>
     @viteReactRefresh
+    @viteReactRefresh
     @vite(['resources/css/app.css', 'resources/photobook-editor/main.tsx'])
     <style>
         /* ------------------------------------------------------------------ */
