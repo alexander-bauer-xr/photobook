@@ -9,10 +9,19 @@ import SettingsPanel from './components/SettingsPanel';
 import { api } from './api/client';
 import { useTemplates } from './hooks/useTemplates';
 import { PB } from './lib/api';
+import { Badge } from './components/ui/badge';
+import { Button } from './components/ui/button';
+import { Card, CardContent } from './components/ui/card';
+import { Checkbox } from './components/ui/checkbox';
+import { Input } from './components/ui/input';
+import { Label } from './components/ui/label';
+import { Separator } from './components/ui/separator';
 
 const qc = new QueryClient();
 
 const defaultCoverDateText = () => new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' });
+const selectControlClassName =
+  'h-10 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-900 shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-neutral-300';
 
 export default function App() {
   return <QueryClientProvider client={qc}><Root /></QueryClientProvider>;
@@ -348,8 +357,10 @@ function Root() {
   };
 
   const isLoading = q.isLoading;
+  const isFetchingPages = q.isFetching;
   const isError = q.isError;
   const hasPages = Array.isArray(displayPages) && displayPages.length > 0 && !isError;
+  const showInitialLoading = isLoading && !hasPages;
   const hasPage = !!page;
   const canEditPage = hasPage && !isLoading && !isError;
   const pageLabel = pageIdx === 0 ? 'Cover' : (page ? `Page ${page.n}` : `Page ${pageIdx + 1}`)
@@ -624,7 +635,8 @@ function Root() {
   };
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden bg-neutral-50">
+    <div className="flex h-screen overflow-hidden bg-[radial-gradient(circle_at_top_left,_rgba(191,219,254,0.35),_transparent_28%),linear-gradient(180deg,_#fafaf9_0%,_#f8fafc_100%)]">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
       {/* ── Build Overlay ───────────────────────────────────────────── */}
       {isBuilding && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center">
@@ -651,176 +663,212 @@ function Root() {
       )}
 
       {/* ── Top bar ─────────────────────────────────────────────────── */}
-      <header className="flex-none flex items-center gap-3 px-4 py-2 bg-white border-b border-neutral-200 shadow-sm">
-        {/* Folder selector */}
-        <select
-          aria-label="Albums"
-          className="border border-neutral-300 rounded px-2 py-1 text-sm max-w-[220px]"
-          value={folder}
-          onChange={e => { setFolder(e.target.value); setPageIdx(0); }}
-        >
-          <option value="">Select album…</option>
-          {albums.map(a => (
-            <option key={a.hash} value={a.folder || a.hash}>{a.folder || a.hash} ({a.count})</option>
-          ))}
-        </select>
-        <input
-          className="border border-neutral-300 rounded px-2 py-1 text-sm w-52"
-          value={folder}
-          onChange={e => setFolder(e.target.value)}
-          placeholder="or type folder path…"
-        />
-
-        {/* Build button — always visible and prominent */}
-        <button
-          className="px-4 py-1.5 rounded-lg bg-green-600 text-white font-medium text-sm hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          disabled={!folder || isBuilding}
-          onClick={handleBuild}
-          title={hasPages ? 'Rebuild from Nextcloud' : 'Generate pages from Nextcloud folder'}
-        >
-          {hasPages ? '↺ Rebuild' : '▶ Build'}
-        </button>
-
-        {/* Divider — only show editor controls when pages exist */}
-        {hasPages && (
-          <>
-            <div className="w-px h-6 bg-neutral-200 mx-1" />
-            {/* Page navigation */}
-            <button
-              disabled={pageIdx <= 0}
-              className="px-3 py-1 rounded bg-neutral-200 text-sm disabled:opacity-40"
-              onClick={() => setPageIdx(p => Math.max(0, p - 1))}
-            >← Prev</button>
-            <span className="text-sm text-neutral-700 min-w-[70px] text-center">{pageLabel}</span>
-            <button
-              disabled={displayPages.length <= pageIdx + 1}
-              className="px-3 py-1 rounded bg-neutral-200 text-sm disabled:opacity-40"
-              onClick={() => setPageIdx(p => p + 1)}
-            >Next →</button>
-
-            <div className="w-px h-6 bg-neutral-200 mx-1" />
-
-            {/* Save */}
-            <button
-              className="px-3 py-1.5 rounded bg-blue-600 text-white text-sm disabled:opacity-50"
-              disabled={!canEditPage}
-              onClick={async () => {
-                if (pageIdx === 0) {
-                  const coverImageRel = coverPath || webAssetRelFromUrl(coverWebSrc) || null;
-                  if (!coverImageRel) { alert('Choose a cover photo before saving.'); return; }
-                  const coverPayload = buildCoverPersistencePayload(coverImageRel, { item: coverItemRef.current ?? (page?.items?.[0] ?? null) });
-                  if (!coverPayload) { alert('Unable to build cover payload.'); return; }
-                  try { await PB.setCover(albumHash, coverPayload); alert('Saved cover'); }
-                  catch { alert('Failed to save cover'); }
-                } else {
-                  await save();
-                }
-              }}
-            >{pageIdx === 0 ? 'Save cover' : 'Save page'}</button>
-
-            {/* Export PDF */}
-            <button
-              className="px-3 py-1.5 rounded bg-neutral-700 text-white text-sm disabled:opacity-50"
-              disabled={isExporting || !albumHash}
-              onClick={handleExportPdf}
-              title="Export to PDF via Playwright"
+      <header className="flex-none border-b border-neutral-200/70 bg-white/80 px-4 py-4 backdrop-blur-sm">
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
+          <div className="mr-3 shrink-0">
+            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-neutral-500">Photobook Editor</div>
+            <div className="mt-1 text-lg font-semibold text-neutral-900">Layout workspace</div>
+          </div>
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
+            <select
+              aria-label="Albums"
+              className={`${selectControlClassName} min-w-[12rem] max-w-full flex-1 md:max-w-[240px]`}
+              value={folder}
+              onChange={e => { setFolder(e.target.value); setPageIdx(0); }}
             >
-              {isExporting ? 'Exporting…' : 'Export PDF'}
-            </button>
-            {exportError && (
-              <span className="text-xs text-red-600">{exportError}</span>
-            )}
-          </>
-        )}
+              <option value="">Select album…</option>
+              {albums.map(a => (
+                <option key={a.hash} value={a.folder || a.hash}>{a.folder || a.hash} ({a.count})</option>
+              ))}
+            </select>
+            <Input
+              className="min-w-[14rem] flex-[1.2] md:max-w-[22rem]"
+              value={folder}
+              onChange={e => setFolder(e.target.value)}
+              placeholder="or type folder path…"
+            />
+            <Button
+              variant="success"
+              disabled={!folder || isBuilding}
+              onClick={handleBuild}
+              title={hasPages ? 'Rebuild from Nextcloud' : 'Generate pages from Nextcloud folder'}
+            >
+              {hasPages ? 'Rebuild' : 'Build'}
+            </Button>
+          </div>
 
-        {/* Settings always accessible */}
-        <button
-          className="ml-auto px-3 py-1.5 rounded bg-neutral-100 text-neutral-600 border border-neutral-300 hover:bg-neutral-200 text-sm"
-          onClick={() => setSettingsOpen(true)}
-          title="Settings"
-        >⚙ Settings</button>
+          <div className="ml-auto flex flex-wrap items-center gap-3">
+            {isFetchingPages && (
+              <Badge>Loading pages…</Badge>
+            )}
+            {hasPages && (
+              <>
+                <Separator orientation="vertical" className="mx-1 hidden h-8 md:block" />
+                <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={pageIdx <= 0}
+                  onClick={() => setPageIdx(p => Math.max(0, p - 1))}
+                >
+                  Prev
+                </Button>
+                <Badge>{pageLabel}</Badge>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={displayPages.length <= pageIdx + 1}
+                  onClick={() => setPageIdx(p => p + 1)}
+                >
+                  Next
+                </Button>
+                </div>
+                <Separator orientation="vertical" className="mx-1 hidden h-8 md:block" />
+                <Button
+                  variant="brand"
+                  disabled={!canEditPage}
+                  onClick={async () => {
+                    if (pageIdx === 0) {
+                      const coverImageRel = coverPath || webAssetRelFromUrl(coverWebSrc) || null;
+                      if (!coverImageRel) { alert('Choose a cover photo before saving.'); return; }
+                      const coverPayload = buildCoverPersistencePayload(coverImageRel, { item: coverItemRef.current ?? (page?.items?.[0] ?? null) });
+                      if (!coverPayload) { alert('Unable to build cover payload.'); return; }
+                      try { await PB.setCover(albumHash, coverPayload); alert('Saved cover'); }
+                      catch { alert('Failed to save cover'); }
+                    } else {
+                      await save();
+                    }
+                  }}
+                >
+                  {pageIdx === 0 ? 'Save cover' : 'Save page'}
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={isExporting || !albumHash}
+                  onClick={handleExportPdf}
+                  title="Export to PDF via Playwright"
+                >
+                  {isExporting ? 'Exporting…' : 'Export PDF'}
+                </Button>
+                {exportError && <Badge variant="warning">{exportError}</Badge>}
+              </>
+            )}
+
+            <Button variant="outline" onClick={() => setSettingsOpen(true)} title="Settings">
+              Settings
+            </Button>
+          </div>
+        </div>
       </header>
 
       {/* ── Cover editor bar (only on page 0 after build) ──────────── */}
       {hasPages && albumHash && pageIdx === 0 && (
-        <div className="flex-none px-4 py-2 bg-white border-b border-neutral-100 flex flex-wrap items-center gap-3">
-          <label className="text-sm text-neutral-600 w-14">Title</label>
-          <input
-            className="border border-neutral-300 rounded px-2 py-1 text-sm flex-1 min-w-[180px]"
-            value={coverTitle}
-            onChange={e => setCoverTitle(e.target.value)}
-            placeholder="Cover title"
-          />
-          <label className="text-sm text-neutral-600">Subheadline</label>
-          <input
-            className="border border-neutral-300 rounded px-2 py-1 text-sm flex-1 min-w-[180px]"
-            value={coverSubtitle}
-            onChange={e => setCoverSubtitle(e.target.value)}
-            placeholder="(optional)"
-          />
-          <label className="flex items-center gap-1.5 text-sm text-neutral-600 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={coverShowDate}
-              onChange={e => {
-                const next = e.target.checked;
-                setCoverShowDate(next);
-                if (next && !(coverDateText || '').trim()) setCoverDateText(defaultCoverDateText());
-              }}
-            />
-            Date
-          </label>
-          <input
-            className="border border-neutral-300 rounded px-2 py-1 text-sm w-44 disabled:opacity-40"
-            value={coverDateText}
-            onChange={e => setCoverDateText(e.target.value)}
-            placeholder="e.g. Summer 2025"
-            disabled={!coverShowDate}
-          />
-          <button
-            className="px-3 py-1 text-sm rounded bg-neutral-200 disabled:opacity-50"
-            disabled={!canEditPage}
-            onClick={() => openReplace(0)}
-          >Choose photo…</button>
-          {coverWebSrc && <img src={coverWebSrc} alt="cover" className="h-8 rounded border" />}
+        <div className="flex-none border-b border-neutral-200/70 bg-white/70 px-4 py-4">
+          <Card className="rounded-[26px] border-neutral-200/80 bg-white/90 shadow-sm">
+            <CardContent className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.85fr)_auto]">
+              <div className="xl:col-span-full">
+                <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-neutral-500">Cover</div>
+                <div className="mt-1 text-sm text-neutral-700">Fine-tune the front cover metadata and hero image.</div>
+              </div>
+              <div className="min-w-0">
+                <Label htmlFor="cover-title" className="mb-2 block text-xs uppercase tracking-[0.12em] text-neutral-500">
+                  Title
+                </Label>
+                <Input
+                  id="cover-title"
+                  value={coverTitle}
+                  onChange={e => setCoverTitle(e.target.value)}
+                  placeholder="Cover title"
+                />
+              </div>
+              <div className="min-w-0">
+                <Label htmlFor="cover-subtitle" className="mb-2 block text-xs uppercase tracking-[0.12em] text-neutral-500">
+                  Subheadline
+                </Label>
+                <Input
+                  id="cover-subtitle"
+                  value={coverSubtitle}
+                  onChange={e => setCoverSubtitle(e.target.value)}
+                  placeholder="Optional"
+                />
+              </div>
+              <div className="min-w-0">
+                <Label htmlFor="cover-date" className="mb-2 block text-xs uppercase tracking-[0.12em] text-neutral-500">
+                  Date
+                </Label>
+                <Input
+                  id="cover-date"
+                  value={coverDateText}
+                  onChange={e => setCoverDateText(e.target.value)}
+                  placeholder="e.g. Summer 2025"
+                  disabled={!coverShowDate}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-3 xl:col-span-full">
+                <label className="flex items-center gap-3 rounded-2xl border border-neutral-200 bg-neutral-50 px-4 py-3">
+                  <Checkbox
+                    checked={coverShowDate}
+                    onCheckedChange={(checked) => {
+                      const next = checked === true;
+                      setCoverShowDate(next);
+                      if (next && !(coverDateText || '').trim()) setCoverDateText(defaultCoverDateText());
+                    }}
+                  />
+                  <span className="text-sm font-medium text-neutral-700">Show date</span>
+                </label>
+                <Button
+                  variant="outline"
+                  disabled={!canEditPage}
+                  onClick={() => openReplace(0)}
+                >
+                  Choose photo
+                </Button>
+                {coverWebSrc ? <img src={coverWebSrc} alt="cover" className="h-12 rounded-2xl border border-neutral-200" /> : null}
+              </div>
+            </CardContent>
+          </Card>
         </div>
       )}
 
       {/* ── Main content area ───────────────────────────────────────── */}
-      <main className="flex-1 flex overflow-hidden">
+      <main className="flex min-w-0 flex-1 overflow-hidden">
         {/* Empty / build-required state */}
         {!hasPages && !isLoading && (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="flex flex-col items-center gap-6 text-center max-w-md">
-              <div className="text-6xl">📷</div>
-              <div>
-                <h1 className="text-2xl font-semibold text-neutral-800 mb-2">Photobook Editor</h1>
-                <p className="text-neutral-500 text-sm">
-                  {folder
-                    ? `No pages found for "${folder}". Start a build to generate the layout from your Nextcloud folder.`
-                    : 'Enter a Nextcloud folder path above or select an album, then click Build.'}
-                </p>
-              </div>
-              {folder && (
-                <button
-                  className="px-8 py-3 rounded-xl bg-green-600 text-white font-semibold text-lg hover:bg-green-700 disabled:opacity-50"
-                  disabled={isBuilding}
-                  onClick={handleBuild}
-                >
-                  ▶ Build Photobook
-                </button>
-              )}
-              {isError && (
-                <p className="text-xs text-red-500">
-                  Could not load pages — the folder may not have been built yet.
-                </p>
-              )}
-            </div>
+          <div className="flex flex-1 items-center justify-center p-6">
+            <Card className="w-full max-w-2xl rounded-[32px] border-neutral-200/80 bg-white/90 shadow-xl shadow-blue-100/30">
+              <CardContent className="flex flex-col items-center gap-6 p-10 text-center">
+                <Badge variant="success">Start Here</Badge>
+                <div className="text-6xl">📷</div>
+                <div>
+                  <h1 className="mb-2 text-3xl font-semibold text-neutral-900">Photobook Editor</h1>
+                  <p className="mx-auto max-w-lg text-sm leading-6 text-neutral-500">
+                    {folder
+                      ? `No pages found for "${folder}". Start a build to generate the layout from your Nextcloud folder.`
+                      : 'Enter a Nextcloud folder path above or select an album, then click Build.'}
+                  </p>
+                </div>
+                {folder && (
+                  <Button
+                    variant="success"
+                    size="lg"
+                    disabled={isBuilding}
+                    onClick={handleBuild}
+                  >
+                    Build Photobook
+                  </Button>
+                )}
+                {isError && (
+                  <Badge variant="warning">
+                    Could not load pages. The folder may not have been built yet.
+                  </Badge>
+                )}
+              </CardContent>
+            </Card>
           </div>
         )}
 
         {/* Loading spinner */}
-        {isLoading && (
+        {showInitialLoading && (
           <div className="flex-1 flex items-center justify-center">
             <div className="text-sm text-neutral-500">Loading pages…</div>
           </div>
@@ -829,57 +877,69 @@ function Root() {
         {/* Editor + Sidebar */}
         {hasPages && (
           <>
-            <div className="flex-1 flex items-center justify-center overflow-auto p-4">
+            <div className="min-w-0 flex-1 overflow-auto p-4">
               {!page ? (
-                <div className="text-sm text-neutral-500">No page selected.</div>
+                <div className="flex h-full items-center justify-center text-sm text-neutral-500">No page selected.</div>
               ) : (
-                <EditorCanvas
-                  page={page}
-                  version={pageVersion}
-                  coverMeta={pageIdx === 0 ? coverMetaForEditor : undefined}
-                  onChange={(items) => {
-                    if (page) {
-                      page.items = items as any;
-                      setPageVersion(v => v + 1);
-                    }
-                    if (pageIdx === 0 && Array.isArray(items) && items.length) {
-                      const first = items[0] as any;
-                      const existing = coverItemRef.current ?? {};
-                      let photo = first?.photo ?? existing.photo ?? null;
-                      if ((!photo || !photo.path) && coverPhotoPath) {
-                        const fname = (coverPhotoPath.split('/') || []).pop() || undefined;
-                        photo = { path: coverPhotoPath, ...(fname ? { filename: fname } : {}) };
+                <div className="flex min-h-full min-w-0 flex-col items-stretch justify-center rounded-[36px] border border-neutral-200/80 bg-[radial-gradient(circle_at_top,_rgba(191,219,254,0.28),_transparent_34%),linear-gradient(180deg,_rgba(255,255,255,0.96),_rgba(248,250,252,0.96))] p-6 shadow-xl shadow-blue-100/20">
+                  <div className="mb-5 flex w-full flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-neutral-500">Workspace Stage</div>
+                      <div className="mt-1 text-sm text-neutral-600">Zentriert, ruhiger und stabiler beim Bearbeiten.</div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge>{pageLabel}</Badge>
+                      <Badge variant="default">{page?.items?.length || 0} assets</Badge>
+                    </div>
+                  </div>
+                  <EditorCanvas
+                    page={page}
+                    version={pageVersion}
+                    coverMeta={pageIdx === 0 ? coverMetaForEditor : undefined}
+                    onChange={(items) => {
+                      if (page) {
+                        page.items = items as any;
+                        setPageVersion(v => v + 1);
                       }
-                      coverItemRef.current = { ...existing, ...(first ? { ...first } : {}), slotIndex: 0, photo };
-                    }
-                  }}
-                  onSave={async (items: any[]) => {
-                    if (!page) return;
-                    await api.savePage({
-                      folder,
-                      page: page.n,
-                      items: items.map((it: any) => {
-                        const fit = it.fit === 'contain' ? 'contain' : 'cover';
-                        const align = { x: clamp01(Number(it.align?.x ?? 0)), y: clamp01(Number(it.align?.y ?? 0)) };
-                        const offset = { x: Number(it.offset?.x) || 0, y: Number(it.offset?.y) || 0 };
-                        const zoom = isPos(it.zoom) ? Number(it.zoom) : 1;
-                        const rotation = Number.isFinite(Number(it.rotation)) ? Number(it.rotation) : 0;
-                        const objectPosition = `${Math.round(50 + align.x * 50)}% ${Math.round(50 + align.y * 50)}%`;
-                        const caption = typeof it.caption === 'string' ? it.caption : typeof it.caption === 'number' ? String(it.caption) : undefined;
-                        return {
-                          slotIndex: it.slotIndex,
-                          fit, align, offset, zoom, rotation, auto: !!it.auto,
-                          ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {}),
-                          ...(it.src ? { src: it.src } : {}),
-                          ...(caption !== undefined ? { caption } : {}),
-                          crop: fit, objectPosition, scale: zoom, rotate: rotation,
-                        };
-                      }),
-                      templateId: page.templateId || null,
-                    });
-                    alert('Saved page overrides');
-                  }}
-                />
+                      if (pageIdx === 0 && Array.isArray(items) && items.length) {
+                        const first = items[0] as any;
+                        const existing = coverItemRef.current ?? {};
+                        let photo = first?.photo ?? existing.photo ?? null;
+                        if ((!photo || !photo.path) && coverPhotoPath) {
+                          const fname = (coverPhotoPath.split('/') || []).pop() || undefined;
+                          photo = { path: coverPhotoPath, ...(fname ? { filename: fname } : {}) };
+                        }
+                        coverItemRef.current = { ...existing, ...(first ? { ...first } : {}), slotIndex: 0, photo };
+                      }
+                    }}
+                    onSave={async (items: any[]) => {
+                      if (!page) return;
+                      await api.savePage({
+                        folder,
+                        page: page.n,
+                        items: items.map((it: any) => {
+                          const fit = it.fit === 'contain' ? 'contain' : 'cover';
+                          const align = { x: clamp01(Number(it.align?.x ?? 0)), y: clamp01(Number(it.align?.y ?? 0)) };
+                          const offset = { x: Number(it.offset?.x) || 0, y: Number(it.offset?.y) || 0 };
+                          const zoom = isPos(it.zoom) ? Number(it.zoom) : 1;
+                          const rotation = Number.isFinite(Number(it.rotation)) ? Number(it.rotation) : 0;
+                          const objectPosition = `${Math.round(50 + align.x * 50)}% ${Math.round(50 + align.y * 50)}%`;
+                          const caption = typeof it.caption === 'string' ? it.caption : typeof it.caption === 'number' ? String(it.caption) : undefined;
+                          return {
+                            slotIndex: it.slotIndex,
+                            fit, align, offset, zoom, rotation, auto: !!it.auto,
+                            ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {}),
+                            ...(it.src ? { src: it.src } : {}),
+                            ...(caption !== undefined ? { caption } : {}),
+                            crop: fit, objectPosition, scale: zoom, rotate: rotation,
+                          };
+                        }),
+                        templateId: page.templateId || null,
+                      });
+                      alert('Saved page overrides');
+                    }}
+                  />
+                </div>
               )}
             </div>
             <Sidebar
@@ -934,12 +994,13 @@ function Root() {
             <div className="text-sm text-neutral-700">
               {isLoading ? 'Loading pages…' : isError ? 'Unable to load page data.' : 'No page data available.'}
             </div>
-            <button className="px-3 py-1 text-sm rounded bg-neutral-200" onClick={() => setDrawerOpen(false)}>Close</button>
+            <Button size="sm" variant="secondary" onClick={() => setDrawerOpen(false)}>Close</Button>
           </div>
         </div>
       )}
       {latestPdfUrl && <PdfReadyModal url={latestPdfUrl} onClose={() => setLatestPdfUrl(null)} />}
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      </div>
     </div>
   );
 }

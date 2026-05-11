@@ -60,7 +60,6 @@ final class LayoutPlannerV2
         $histPenalty = (float) ($var['hist_penalty'] ?? 0.12);
         $repeatPenalty = (float) ($var['repeat_penalty'] ?? 0.25);
         $recent = array_slice((array)($context['recent'] ?? []), -((int)($var['repeat_window'] ?? 6)));
-        $biasMap = is_array($context['bias'] ?? null) ? (array)$context['bias'] : [];
         foreach ($candidates as $tpl) {
             $res = $this->scoreTemplate($tpl, $photosPage);
             // Apply histogram mismatch penalty (convert to score domain)
@@ -68,9 +67,6 @@ final class LayoutPlannerV2
             // Apply repeat penalty if same template used recently (per occurrence)
             $rep = 0; foreach ($recent as $r) { if ($r === ($tpl['id'] ?? '')) $rep++; }
             if ($rep > 0) { $score -= $repeatPenalty * $rep; }
-            // Apply external bias (e.g., user feedback)
-            $bias = (float) ($biasMap[$tpl['id']] ?? 0.0);
-            if ($bias !== 0.0) { $score += $bias; }
 
             if ($score > $bestScore) {
                 $second = $best; $secondScore = $bestScore;

@@ -2,6 +2,8 @@ import React, { useRef, useState, useEffect, useCallback } from 'react';
 import Filmstrip from './Filmstrip';
 import SlotView from './SlotView';
 import { fitMath, alignOffsetToPanPx, solveAlignOffset, clamp, isFinitePos } from '../lib/layoutMath';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
 
 /* =========================================================
    useUndoRedo (inline) – batching & limits
@@ -663,8 +665,8 @@ export default function EditorCanvas({
      Render
      ============================== */
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-3">
+    <div className="flex w-full min-w-0 flex-col gap-4">
+      <div className="flex flex-wrap items-center gap-3 rounded-[26px] border border-neutral-200/80 bg-white/90 px-4 py-3 shadow-sm">
         <Filmstrip
           items={items}
           selected={selectedIdx}
@@ -672,31 +674,39 @@ export default function EditorCanvas({
           onReorder={handleReorder}
         />
         <div className="flex items-center gap-2">
-          <button
-            className="px-2 py-1 bg-neutral-200 rounded disabled:opacity-50"
+          <Button
+            size="sm"
+            variant="secondary"
             onClick={undo}
             disabled={!canUndo}
             title="Undo (Ctrl/Cmd+Z)"
-          >↶ Undo</button>
-          <button
-            className="px-2 py-1 bg-neutral-200 rounded disabled:opacity-50"
+          >
+            Undo
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
             onClick={redo}
             disabled={!canRedo}
             title="Redo (Shift+Ctrl/Cmd+Z • Ctrl+Y)"
-          >↷ Redo</button>
+          >
+            Redo
+          </Button>
         </div>
-        <div className="text-xs text-neutral-600">
-          {saveState === 'saving' && <span>Saving…</span>}
-          {saveState === 'saved' && <span className="text-green-600">Saved ✓</span>}
-          {saveState === 'error' && <span className="text-red-600">Save error</span>}
+        <div className="ml-auto flex flex-wrap items-center gap-2 text-xs text-neutral-600">
+          <Badge>Drag to reorder</Badge>
+          <Badge>Wheel to zoom</Badge>
+          {saveState === 'saving' && <Badge>Saving…</Badge>}
+          {saveState === 'saved' && <Badge variant="success">Saved</Badge>}
+          {saveState === 'error' && <Badge variant="warning">Save error</Badge>}
         </div>
       </div>
 
       {/* Page Canvas */}
       <div
         ref={rootRef}
-        className="relative bg-white shadow border border-neutral-200 rounded"
-        style={{ width, height, userSelect: 'none' }}
+        className="relative overflow-hidden rounded-[28px] border border-neutral-200 bg-white shadow-[0_18px_45px_rgba(15,23,42,0.08)]"
+        style={{ width: '100%', maxWidth: '100%', aspectRatio: `${width} / ${height}`, userSelect: 'none' }}
       >
         {items.map((it, i) => {
           const slots: Slot[] = Array.isArray(page.slots) ? page.slots : [];
@@ -794,18 +804,6 @@ export default function EditorCanvas({
         )}
       </div>
 
-      <div className="flex gap-2">
-        <button className="px-4 py-2 bg-blue-600 text-white rounded shadow" onClick={handleSave}>Save overrides</button>
-        <button
-          className="px-3 py-2 bg-neutral-200 rounded"
-          onClick={() => {
-            const normalized = items.map(normalizeItem);
-            onChange?.(normalized);
-          }}
-        >
-          Sync state
-        </button>
-      </div>
     </div>
   );
 }

@@ -195,15 +195,42 @@ class PhotobookController extends Controller
     {
         $root    = storage_path('app/pdf-exports/_cache/' . $hash);
         $absPath = realpath($root . DIRECTORY_SEPARATOR . $path);
+        $rootReal = realpath($root);
 
-        // Prevent path traversal
-        if (!$absPath || !str_starts_with($absPath, realpath($root) . DIRECTORY_SEPARATOR)) {
-            abort(403);
+        // Prevent path traversal (only if root exists)
+        if ($rootReal && $absPath && str_starts_with($absPath, $rootReal . DIRECTORY_SEPARATOR) && is_file($absPath)) {
+            $mime = mime_content_type($absPath) ?: 'application/octet-stream';
+            return Response::file($absPath, ['Content-Type' => $mime, 'Cache-Control' => 'max-age=86400']);
         }
-        if (!is_file($absPath)) abort(404);
 
-        $mime = mime_content_type($absPath) ?: 'application/octet-stream';
-        return Response::file($absPath, ['Content-Type' => $mime, 'Cache-Control' => 'max-age=86400']);
+        // File not cached locally — proxy from Nextcloud WebDAV and cache
+        try {
+            $dav = app(\App\Services\WebDavClient::class);
+            $content = $dav->download($path);
+            if ($content === null || $content === false || $content === '') abort(404);
+
+            // Cache locally for subsequent requests
+            $target = $root . DIRECTORY_SEPARATOR . $path;
+            $dir = dirname($target);
+            if (!is_dir($dir)) @mkdir($dir, 0775, true);
+            @file_put_contents($target, $content);
+
+            $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+            $mime = match($ext) {
+                'jpg','jpeg' => 'image/jpeg',
+                'png'        => 'image/png',
+                'webp'       => 'image/webp',
+                'gif'        => 'image/gif',
+                default      => 'application/octet-stream',
+            };
+            return response($content, 200, [
+                'Content-Type'  => $mime,
+                'Cache-Control' => 'max-age=86400',
+            ]);
+        } catch (\Throwable $e) {
+            logger()->warning('PB: asset proxy failed', ['path' => $path, 'error' => $e->getMessage()]);
+            abort(404);
+        }
     }
 
     // --------------------------------------------------------------------------
@@ -293,39 +320,6 @@ class PhotobookController extends Controller
 
         $data['pages'][(string) $page] = $entry;
         @file_put_contents($jsonPath, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-
-        return response()->json(['ok' => true]);
-    }
-
-    // --------------------------------------------------------------------------
-    // POST /photobook/feedback
-    // --------------------------------------------------------------------------
-
-    public function feedback(Request $request)
-    {
-        $folder = (string) $request->input('folder', Config::get('photobook.folder'));
-        $page   = (int)    $request->input('page', 0);
-        $action = (string) $request->input('action', '');
-
-        if ($page < 1 || $action === '') {
-            return response()->json(['ok' => false, 'error' => 'Invalid page/action'], 422);
-        }
-
-        $cacheRoot = $this->cacheRoot($folder);
-        if (!is_dir($cacheRoot)) @mkdir($cacheRoot, 0775, true);
-
-        $entry = [
-            'ts'     => date(DATE_ATOM),
-            'folder' => $folder,
-            'page'   => $page,
-            'action' => $action,
-            'reason' => $request->input('reason') ?: null,
-        ];
-        @file_put_contents(
-            $cacheRoot . DIRECTORY_SEPARATOR . 'feedback.log',
-            json_encode($entry, JSON_UNESCAPED_SLASHES) . "\n",
-            FILE_APPEND
-        );
 
         return response()->json(['ok' => true]);
     }

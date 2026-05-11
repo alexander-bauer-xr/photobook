@@ -1,9 +1,73 @@
-import React, { useState, useEffect } from 'react';
-import { PB, type AppSettings, type PrintSettings } from '../lib/api';
+import React, { useEffect, useState } from 'react';
+import { PB, type AppSettings } from '../lib/api';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+import { Button } from './ui/button';
+import { Input } from './ui/input';
+import { Label } from './ui/label';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
+import { Badge } from './ui/badge';
+import { Separator } from './ui/separator';
+import { Switch } from './ui/switch';
+import { Checkbox } from './ui/checkbox';
 
 interface SettingsPanelProps {
   open: boolean;
   onClose: () => void;
+}
+
+function MetricCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-neutral-200 bg-neutral-50/80 p-4">
+      <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-neutral-500">{label}</div>
+      <div className="mt-2 text-sm font-semibold text-neutral-900">{value}</div>
+    </div>
+  );
+}
+
+function NumberField({
+  id,
+  label,
+  suffix,
+  value,
+  onChange,
+  disabled,
+  min,
+  max,
+  step,
+}: {
+  id: string;
+  label: string;
+  suffix?: string;
+  value: number;
+  onChange: (next: number) => void;
+  disabled?: boolean;
+  min?: number;
+  max?: number;
+  step?: number;
+}) {
+  return (
+    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_120px_auto] sm:items-center">
+      <Label htmlFor={id}>{label}</Label>
+      <Input
+        id={id}
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(parseFloat(event.target.value) || 0)}
+      />
+      {suffix ? <span className="text-sm text-neutral-500">{suffix}</span> : <span />}
+    </div>
+  );
 }
 
 export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
@@ -11,8 +75,6 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Local editable state for print settings
   const [printEnabled, setPrintEnabled] = useState(false);
   const [bleedMm, setBleedMm] = useState(3.0);
   const [cropMarks, setCropMarks] = useState(true);
@@ -22,15 +84,16 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     if (!open) return;
     setLoading(true);
     setError(null);
+
     PB.getSettings()
-      .then(res => {
-        setSettings(res.settings);
-        setPrintEnabled(res.settings.print.enabled);
-        setBleedMm(res.settings.print.bleed_mm);
-        setCropMarks(res.settings.print.crop_marks);
-        setSpineMarginMm(res.settings.print.spine_margin_mm);
+      .then((response) => {
+        setSettings(response.settings);
+        setPrintEnabled(response.settings.print.enabled);
+        setBleedMm(response.settings.print.bleed_mm);
+        setCropMarks(response.settings.print.crop_marks);
+        setSpineMarginMm(response.settings.print.spine_margin_mm);
       })
-      .catch(err => setError(err.message || 'Failed to load settings'))
+      .catch((err) => setError(err.message || 'Failed to load settings'))
       .finally(() => setLoading(false));
   }, [open]);
 
@@ -55,165 +118,153 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     }
   };
 
-  if (!open) return null;
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative bg-white rounded-lg shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-auto">
-        <header className="px-6 py-4 border-b border-neutral-200 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-neutral-800">Settings</h2>
-          <button
-            onClick={onClose}
-            className="text-neutral-500 hover:text-neutral-800 text-xl leading-none"
-          >
-            ×
-          </button>
-        </header>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) onClose();
+      }}
+    >
+      <DialogContent className="max-w-3xl overflow-hidden p-0">
+        <DialogHeader className="border-b border-neutral-200 px-6 py-5">
+          <div className="flex items-start justify-between gap-4 pr-10">
+            <div className="space-y-2">
+              <DialogTitle>Editor Settings</DialogTitle>
+              <DialogDescription>
+                Manage print production defaults and confirm the current editor environment before exporting.
+              </DialogDescription>
+            </div>
+            {settings && (
+              <Badge variant={settings.nextcloud.configured ? 'success' : 'default'}>
+                {settings.nextcloud.configured ? 'Nextcloud Connected' : 'Nextcloud Not Configured'}
+              </Badge>
+            )}
+          </div>
+        </DialogHeader>
 
-        <div className="px-6 py-4">
+        <div className="max-h-[82vh] overflow-y-auto px-6 py-5">
           {loading ? (
-            <div className="text-center py-8 text-neutral-500">Loading settings…</div>
+            <div className="rounded-2xl border border-dashed border-neutral-200 bg-neutral-50 px-6 py-10 text-center text-sm text-neutral-500">
+              Loading settings…
+            </div>
           ) : error ? (
-            <div className="text-center py-8 text-red-600">{error}</div>
+            <div className="rounded-2xl border border-red-200 bg-red-50 px-6 py-10 text-center text-sm text-red-600">
+              {error}
+            </div>
           ) : (
-            <div className="space-y-6">
-              {/* General Info */}
-              <section>
-                <h3 className="text-sm font-medium text-neutral-600 mb-3 uppercase tracking-wide">General</h3>
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div className="bg-neutral-50 rounded p-3">
-                    <div className="text-neutral-500 text-xs mb-1">Paper</div>
-                    <div className="font-medium capitalize">{settings?.paper} {settings?.orientation}</div>
-                  </div>
-                  <div className="bg-neutral-50 rounded p-3">
-                    <div className="text-neutral-500 text-xs mb-1">DPI</div>
-                    <div className="font-medium">{settings?.dpi}</div>
-                  </div>
-                  <div className="bg-neutral-50 rounded p-3">
-                    <div className="text-neutral-500 text-xs mb-1">Page Frame</div>
-                    <div className="font-medium">{settings?.page_frame_mm} mm</div>
-                  </div>
-                  <div className="bg-neutral-50 rounded p-3">
-                    <div className="text-neutral-500 text-xs mb-1">Page Gap</div>
-                    <div className="font-medium">{settings?.page_gap_mm} mm</div>
-                  </div>
-                </div>
-              </section>
+            <div className="space-y-5">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Workspace</CardTitle>
+                  <CardDescription>
+                    These values come from the backend configuration and help explain how the current book is rendered.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <MetricCard label="Paper" value={`${settings?.paper ?? '—'} ${settings?.orientation ?? ''}`.trim()} />
+                  <MetricCard label="DPI" value={String(settings?.dpi ?? '—')} />
+                  <MetricCard label="Page Frame" value={`${settings?.page_frame_mm ?? '—'} mm`} />
+                  <MetricCard label="Page Gap" value={`${settings?.page_gap_mm ?? '—'} mm`} />
+                </CardContent>
+              </Card>
 
-              {/* Print Settings */}
-              <section>
-                <h3 className="text-sm font-medium text-neutral-600 mb-3 uppercase tracking-wide">Print Production</h3>
-                <div className="space-y-4">
-                  {/* Print Mode Toggle */}
-                  <label className="flex items-center gap-3 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={printEnabled}
-                      onChange={(e) => setPrintEnabled(e.target.checked)}
-                      className="w-5 h-5 rounded border-neutral-300 text-green-600 focus:ring-green-500"
-                    />
-                    <div>
-                      <div className="font-medium text-neutral-800">Print Mode</div>
-                      <div className="text-xs text-neutral-500">Enable bleed, crop marks, and spine margins</div>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Print Production</CardTitle>
+                  <CardDescription>
+                    Turn on print mode when you need bleed, binding margin, and trim guidance for press-ready output.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-5">
+                  <div className="flex items-start justify-between gap-4 rounded-2xl border border-neutral-200 bg-neutral-50/70 p-4">
+                    <div className="space-y-1">
+                      <Label htmlFor="print-mode" className="text-base text-neutral-900">
+                        Print mode
+                      </Label>
+                      <p className="text-sm text-neutral-500">
+                        Enable bleed, crop marks, and spine margins for exported layouts.
+                      </p>
                     </div>
-                  </label>
+                    <Switch id="print-mode" checked={printEnabled} onCheckedChange={setPrintEnabled} />
+                  </div>
 
-                  {/* Print options (enabled when print mode is on) */}
-                  <div className={`space-y-4 pl-8 ${!printEnabled ? 'opacity-50 pointer-events-none' : ''}`}>
-                    {/* Bleed */}
-                    <div className="flex items-center gap-3">
-                      <label className="text-sm text-neutral-700 w-32">Bleed</label>
-                      <input
-                        type="number"
-                        step="0.5"
-                        min="0"
-                        max="10"
+                  <div className={!printEnabled ? 'pointer-events-none opacity-55' : ''}>
+                    <div className="grid gap-4">
+                      <NumberField
+                        id="bleed-mm"
+                        label="Bleed"
+                        suffix="mm"
                         value={bleedMm}
-                        onChange={(e) => setBleedMm(parseFloat(e.target.value) || 0)}
-                        className="w-20 px-2 py-1 border border-neutral-300 rounded text-sm"
+                        onChange={setBleedMm}
                         disabled={!printEnabled}
+                        min={0}
+                        max={10}
+                        step={0.5}
                       />
-                      <span className="text-sm text-neutral-500">mm</span>
-                    </div>
-
-                    {/* Spine Margin */}
-                    <div className="flex items-center gap-3">
-                      <label className="text-sm text-neutral-700 w-32">Spine Margin</label>
-                      <input
-                        type="number"
-                        step="1"
-                        min="0"
-                        max="25"
+                      <NumberField
+                        id="spine-margin-mm"
+                        label="Spine margin"
+                        suffix="mm for binding"
                         value={spineMarginMm}
-                        onChange={(e) => setSpineMarginMm(parseFloat(e.target.value) || 0)}
-                        className="w-20 px-2 py-1 border border-neutral-300 rounded text-sm"
+                        onChange={setSpineMarginMm}
                         disabled={!printEnabled}
+                        min={0}
+                        max={25}
+                        step={1}
                       />
-                      <span className="text-sm text-neutral-500">mm (for binding)</span>
                     </div>
 
-                    {/* Crop Marks */}
-                    <label className="flex items-center gap-3 cursor-pointer">
-                      <input
-                        type="checkbox"
+                    <Separator className="my-5" />
+
+                    <div className="flex items-start gap-3 rounded-2xl border border-neutral-200 p-4">
+                      <Checkbox
+                        id="crop-marks"
                         checked={cropMarks}
-                        onChange={(e) => setCropMarks(e.target.checked)}
-                        className="w-5 h-5 rounded border-neutral-300 text-green-600 focus:ring-green-500"
                         disabled={!printEnabled}
+                        onCheckedChange={(checked) => setCropMarks(checked === true)}
                       />
-                      <div>
-                        <div className="text-sm text-neutral-800">Crop Marks</div>
-                        <div className="text-xs text-neutral-500">Show trim marks for cutting</div>
+                      <div className="space-y-1">
+                        <Label htmlFor="crop-marks" className="text-neutral-900">
+                          Crop marks
+                        </Label>
+                        <p className="text-sm text-neutral-500">
+                          Show trim marks so the final PDF is easier to align in downstream print prep.
+                        </p>
                       </div>
-                    </label>
+                    </div>
                   </div>
-                </div>
-              </section>
+                </CardContent>
+              </Card>
 
-              {/* Nextcloud Status */}
-              <section>
-                <h3 className="text-sm font-medium text-neutral-600 mb-3 uppercase tracking-wide">Integration</h3>
-                <div className="flex items-center gap-2 text-sm">
-                  <span className={`w-2 h-2 rounded-full ${settings?.nextcloud.configured ? 'bg-green-500' : 'bg-neutral-300'}`} />
-                  <span className="text-neutral-700">
-                    Nextcloud {settings?.nextcloud.configured ? 'connected' : 'not configured'}
-                  </span>
-                </div>
-              </section>
-
-              {/* Print Workflow Info */}
-              {printEnabled && (
-                <section className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-                  <h4 className="text-sm font-medium text-amber-800 mb-2">⚠️ Print Workflow</h4>
-                  <p className="text-xs text-amber-700 leading-relaxed">
-                    PDFs are generated in RGB. For professional printing, convert to CMYK using the provided script:
-                  </p>
-                  <code className="block mt-2 text-xs bg-amber-100 p-2 rounded font-mono text-amber-900">
+              <Card className={printEnabled ? 'border-amber-200 bg-amber-50/70' : ''}>
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <CardTitle>Export Workflow</CardTitle>
+                    {printEnabled && <Badge variant="warning">CMYK Follow-up Needed</Badge>}
+                  </div>
+                  <CardDescription>
+                    PDFs are produced in RGB. Keep this conversion step handy for the print handoff.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="rounded-2xl bg-neutral-950 px-4 py-3 font-mono text-xs text-neutral-100">
                     ./scripts/convert-to-cmyk.sh storage/app/pdf-exports/photobook.pdf
-                  </code>
-                </section>
-              )}
+                  </div>
+                </CardContent>
+              </Card>
             </div>
           )}
         </div>
 
-        <footer className="px-6 py-4 border-t border-neutral-200 flex justify-end gap-3">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm text-neutral-600 hover:text-neutral-800"
-          >
+        <DialogFooter className="border-t border-neutral-200 px-6 py-4">
+          <Button variant="ghost" onClick={onClose}>
             Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={loading || saving}
-            className="px-4 py-2 text-sm bg-neutral-800 text-white rounded hover:bg-neutral-700 disabled:opacity-50"
-          >
+          </Button>
+          <Button variant="brand" onClick={handleSave} disabled={loading || saving}>
             {saving ? 'Saving…' : 'Save Settings'}
-          </button>
-        </footer>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

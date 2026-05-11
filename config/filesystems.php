@@ -60,6 +60,19 @@ return [
             'report' => false,
         ],
 
+        'nextcloud' => [
+            'driver'   => 'webdav',
+            'baseUri'  => env('NEXTCLOUD_BASE_URI'),
+            'userName' => env('NEXTCLOUD_USERNAME'),
+            'password' => env('NEXTCLOUD_PASSWORD'),
+        ],
+
+        'pdf_exports' => [
+            'driver' => 'local',
+            'root'   => storage_path('app/pdf-exports'),
+            'throw'  => false,
+        ],
+
     ],
 
     /*
