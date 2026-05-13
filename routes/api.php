@@ -10,6 +10,7 @@ Route::prefix('photobook')->group(function () {
     Route::post('/pages/{hash}/page',         [PhotobookController::class, 'addPage']);
     Route::delete('/pages/{hash}/page/{id}',  [PhotobookController::class, 'deletePage']);
     Route::post('/cover/{hash}',              [PhotobookController::class, 'setCover']);
+    Route::post('/feedback/{hash}',           [PhotobookController::class, 'saveLayoutFeedback']);
     Route::post('/build/{hash}',              [PhotobookController::class, 'startBuild']);
     Route::post('/build-folder',              [PhotobookController::class, 'startBuildByFolder']);
     Route::post('/export/{hash}',             [PhotobookController::class, 'exportPdf']);

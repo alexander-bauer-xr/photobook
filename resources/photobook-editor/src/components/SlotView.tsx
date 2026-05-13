@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import ZoomSlider from './ZoomSlider';
 import {
   fitMath,
@@ -48,6 +48,7 @@ export default function SlotView({
   snapshot,
   selected,
   showHud,
+  interactive,
   onSelect,
   onUpdateItem,
   onCommit,
@@ -63,6 +64,7 @@ export default function SlotView({
   snapshot: SlotSnapshot;
   selected: boolean;
   showHud: boolean;
+  interactive: boolean;
   onSelect: (idx: number) => void;
   onUpdateItem: (updater: (prev: Item) => Item) => void;
   onCommit: () => void;
@@ -75,7 +77,9 @@ export default function SlotView({
   const { slotLeft, slotTop, slotW, slotH, contentW, contentH, innerPad } =
     snapshot;
   const isCover = variant === 'cover';
-  const ringClass = isCover
+  const ringClass = !interactive
+    ? 'ring-0'
+    : isCover
     ? (selected ? 'ring-2 ring-blue-500' : 'ring-0')
     : (selected ? 'ring-2 ring-blue-500' : 'ring-1 ring-neutral-200');
 
@@ -102,6 +106,23 @@ export default function SlotView({
 
   const src = getSrc(item);
   const loaded = iw > 0 && ih > 0;
+
+  // Ref for cached-image fallback: browsers may not re-fire onLoad for cached images
+  // after an items reset (pageVersion bump). If image is already complete, populate _iw/_ih.
+  const imgRef = useRef<HTMLImageElement>(null);
+  useEffect(() => {
+    if (iw > 0) return; // dimensions already populated
+    if (!src) return;
+    const el = imgRef.current;
+    if (!el || !el.complete || !(el.naturalWidth > 0)) return;
+    onUpdateItem((prev) => ({
+      ...prev,
+      _iw: el.naturalWidth,
+      _ih: el.naturalHeight,
+      _error: false,
+    }));
+  }, [iw, src]); // re-check when dimensions are reset or src changes
+
   const captionRaw =
     typeof item.caption === 'string'
       ? item.caption
@@ -124,9 +145,11 @@ export default function SlotView({
         willChange: 'transform',
         backfaceVisibility: 'hidden',
       }}
-      onMouseDown={() => onSelect(idx)}
+      onMouseDown={() => {
+        if (interactive) onSelect(idx);
+      }}
       title={`Seite ${pageNumber} – Slot ${item.slotIndex}`}
-      tabIndex={0}
+      tabIndex={interactive ? 0 : -1}
     >
       <div
         style={{
@@ -142,6 +165,7 @@ export default function SlotView({
       >
         {src && !item._error ? (
           <img
+            ref={imgRef}
             src={src}
             alt=""
             draggable={false}
@@ -187,6 +211,7 @@ export default function SlotView({
               onUpdateItem((prev) => ({ ...prev, _error: true }))
             }
             onMouseDown={(e) => {
+              if (!interactive) return;
               if (!(iw > 0 && ih > 0)) return;
               e.preventDefault();
               const startX = e.clientX,
@@ -310,100 +335,103 @@ export default function SlotView({
         )}
       </div>
 
-      {/* Controls */}
-      <div className="absolute bottom-2 left-2 bg-white/85 rounded px-2 py-1 shadow flex items-center gap-2">
-        <span className="text-xs text-neutral-600">Zoom</span>
-        <ZoomSlider
-          value={zoom}
-          min={0.05}
-          max={6}
-          onChange={(v) =>
-            onUpdateItem((prev) => ({ ...prev, zoom: v, auto: false }))
-          }
-        />
-        <span className="text-xs w-10 text-right tabular-nums">
-          {(zoom * 100).toFixed(0)}%
-        </span>
-      </div>
+      {interactive && (
+        <>
+          <div className="absolute bottom-2 left-2 bg-white/85 rounded px-2 py-1 shadow flex items-center gap-2">
+            <span className="text-xs text-neutral-600">Zoom</span>
+            <ZoomSlider
+              value={zoom}
+              min={0.05}
+              max={6}
+              onChange={(v) =>
+                onUpdateItem((prev) => ({ ...prev, zoom: v, auto: false }))
+              }
+            />
+            <span className="text-xs w-10 text-right tabular-nums">
+              {(zoom * 100).toFixed(0)}%
+            </span>
+          </div>
 
-      <div className="absolute top-2 left-2 bg-white/85 rounded px-2 py-1 shadow flex items-center gap-1">
-        <button
-          className="px-2 py-1 text-xs bg-neutral-200 rounded hover:bg-neutral-300"
-          onClick={() => {
-            onUpdateItem((prev) => ({
-              ...prev,
-              rotation:
-                (((prev.rotation || 0) - 90) % 360 + 360) % 360,
-              auto: false,
-            }));
-            onCommit();
-          }}
-          title="⟲ 90° (Shift+R)"
-          aria-label="Rotate -90°"
-        >
-          ⟲ 90°
-        </button>
-        <button
-          className="px-2 py-1 text-xs bg-neutral-200 rounded hover:bg-neutral-300"
-          onClick={() => {
-            onUpdateItem((prev) => ({
-              ...prev,
-              rotation:
-                (((prev.rotation || 0) + 90) % 360 + 360) % 360,
-              auto: false,
-            }));
-            onCommit();
-          }}
-          title="⟳ 90° (R)"
-          aria-label="Rotate +90°"
-        >
-          ⟳ 90°
-        </button>
-        <button
-          className="px-2 py-1 text-xs bg-neutral-200 rounded hover:bg-neutral-300"
-          onClick={() => {
-            onUpdateItem((prev) => ({
-              ...prev,
-              fit: (prev.fit || 'cover') === 'cover' ? 'contain' : 'cover',
-              auto: false,
-            }));
-            onCommit();
-          }}
-          title="Toggle fit (F)"
-          aria-label="Toggle fit"
-        >
-          fit: {fit}
-        </button>
-        <button
-          className="px-2 py-1 text-xs bg-neutral-200 rounded hover:bg-neutral-300"
-          onClick={() => {
-            onUpdateItem((prev) => ({
-              ...prev,
-              align: { x: 0, y: 0 },
-              offset: { x: 0, y: 0 },
-              zoom: 1,
-              rotation: 0,
-              auto: false,
-            }));
-            onCommit();
-          }}
-          title="Reset (0 setzt Zoom)"
-          aria-label="Reset"
-        >
-          Reset
-        </button>
-        <button
-          className="px-2 py-1 text-xs bg-neutral-200 rounded hover:bg-neutral-300"
-          onClick={() => {
-            onUpdateItem((prev) => ({ ...prev, auto: true }));
-            onCommit();
-          }}
-          title="Auto (ML/Default wieder zulassen)"
-          aria-label="Auto mode"
-        >
-          Auto
-        </button>
-      </div>
+          <div className="absolute top-2 left-2 bg-white/85 rounded px-2 py-1 shadow flex items-center gap-1">
+            <button
+              className="px-2 py-1 text-xs bg-neutral-200 rounded hover:bg-neutral-300"
+              onClick={() => {
+                onUpdateItem((prev) => ({
+                  ...prev,
+                  rotation:
+                    (((prev.rotation || 0) - 90) % 360 + 360) % 360,
+                  auto: false,
+                }));
+                onCommit();
+              }}
+              title="⟲ 90° (Shift+R)"
+              aria-label="Rotate -90°"
+            >
+              ⟲ 90°
+            </button>
+            <button
+              className="px-2 py-1 text-xs bg-neutral-200 rounded hover:bg-neutral-300"
+              onClick={() => {
+                onUpdateItem((prev) => ({
+                  ...prev,
+                  rotation:
+                    (((prev.rotation || 0) + 90) % 360 + 360) % 360,
+                  auto: false,
+                }));
+                onCommit();
+              }}
+              title="⟳ 90° (R)"
+              aria-label="Rotate +90°"
+            >
+              ⟳ 90°
+            </button>
+            <button
+              className="px-2 py-1 text-xs bg-neutral-200 rounded hover:bg-neutral-300"
+              onClick={() => {
+                onUpdateItem((prev) => ({
+                  ...prev,
+                  fit: (prev.fit || 'cover') === 'cover' ? 'contain' : 'cover',
+                  auto: false,
+                }));
+                onCommit();
+              }}
+              title="Toggle fit (F)"
+              aria-label="Toggle fit"
+            >
+              fit: {fit}
+            </button>
+            <button
+              className="px-2 py-1 text-xs bg-neutral-200 rounded hover:bg-neutral-300"
+              onClick={() => {
+                onUpdateItem((prev) => ({
+                  ...prev,
+                  align: { x: 0, y: 0 },
+                  offset: { x: 0, y: 0 },
+                  zoom: 1,
+                  rotation: 0,
+                  auto: false,
+                }));
+                onCommit();
+              }}
+              title="Reset (0 setzt Zoom)"
+              aria-label="Reset"
+            >
+              Reset
+            </button>
+            <button
+              className="px-2 py-1 text-xs bg-neutral-200 rounded hover:bg-neutral-300"
+              onClick={() => {
+                onUpdateItem((prev) => ({ ...prev, auto: true }));
+                onCommit();
+              }}
+              title="Auto (ML/Default wieder zulassen)"
+              aria-label="Auto mode"
+            >
+              Auto
+            </button>
+          </div>
+        </>
+      )}
 
       {showHud && (
         <div className="absolute top-2 right-2 bg-white/85 rounded px-2 py-1 shadow text-[10px] leading-tight text-neutral-700">

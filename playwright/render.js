@@ -47,7 +47,18 @@ try {
   // Generous timeout — large photobooks can be slow to render
   page.setDefaultTimeout(120_000);
 
-  await page.goto(url, { waitUntil: 'networkidle', timeout: 90_000 });
+  // Match viewport to PDF page dimensions so that 100vh === one PDF page height.
+  // CSS reference pixels at 96 DPI: 1 mm = 96/25.4 ≈ 3.7795 px
+  const PX_PER_MM = 96 / 25.4;
+  await page.setViewportSize({
+    width:  Math.round(widthMm  * PX_PER_MM),
+    height: Math.round(heightMm * PX_PER_MM),
+  });
+
+  // The print app has its own readiness signal; waiting for network idle can
+  // stall forever when the regular editor is opened or some assets keep a
+  // connection alive longer than expected.
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90_000 });
 
   // Wait for the React editor to signal it is print-ready
   // The page sets window.__printReady = true once all images are loaded.

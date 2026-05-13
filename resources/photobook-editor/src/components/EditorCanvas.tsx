@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import Filmstrip from './Filmstrip';
 import SlotView from './SlotView';
 import { fitMath, alignOffsetToPanPx, solveAlignOffset, clamp, isFinitePos } from '../lib/layoutMath';
@@ -131,6 +131,7 @@ type Props = {
    page: Page;
    onSave?: (overrides: SaveOverride[]) => void;
    onChange?: (items: AnyItem[]) => void;
+   onStructuralChange?: (items: AnyItem[]) => void;
    width?: number;
    height?: number;
    version?: number;
@@ -139,6 +140,7 @@ type Props = {
    gapPx?: number;
    wheelZoomNeedsCtrl?: boolean;
    showHud?: boolean;
+   interactive?: boolean;
    coverMeta?: CoverMeta;
  };
 
@@ -278,6 +280,7 @@ export default function EditorCanvas({
    page,
    onSave,
    onChange,
+   onStructuralChange,
    width = 900,
    height = 600,
    version = 0,
@@ -286,10 +289,13 @@ export default function EditorCanvas({
    gapPx = 8,
    wheelZoomNeedsCtrl = true,
   showHud = true,
+  interactive = true,
   coverMeta,
 }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
   const [pageSize, setPageSize] = useState({ w: width, h: height });
+  const [viewportSize, setViewportSize] = useState({ w: width, h: height });
   const {
     state: items,
     set: setItems,
@@ -310,7 +316,7 @@ export default function EditorCanvas({
     contentW: number; contentH: number; innerPad: number;
   }>>({});
 
-  const isCoverPage = page?.templateId === 'cover' || page?.n === 0 || (page as any)?.id === 'cover';
+  const isCoverPage = page?.templateId === 'cover' || (page as any)?.id === 'cover';
   const primarySlotHeight = Array.isArray(page.slots) && page.slots.length > 0
     ? (Number(page.slots[0]?.h) || 0.649)
     : 0.649;
@@ -331,18 +337,41 @@ export default function EditorCanvas({
     setItems(Array.isArray(page.items) ? page.items.map(normalizeItem) : []);
     commitItems();
     setSelectedIdx(0);
-  }, [page.n, version, page.items, setItems, commitItems]);
+  }, [page.n, (page as any).id, version, setItems, commitItems]);
+
+  const canvasSize = useMemo(() => {
+    if (!interactive) return { w: width, h: height };
+    const availableW = Math.max(1, viewportSize.w);
+    const ratio = width / height;
+    return {
+      w: Math.max(1, Math.floor(availableW)),
+      h: Math.max(1, Math.floor(availableW / ratio)),
+    };
+  }, [height, interactive, viewportSize.w, width]);
 
   // Größe messen
   useEffect(() => {
+    const target = interactive ? viewportRef.current : rootRef.current;
+    if (!target) return;
     const measure = () => {
-      const r = rootRef.current?.getBoundingClientRect();
-      if (r) setPageSize({ w: r.width, h: r.height });
+      const r = target.getBoundingClientRect();
+      if (interactive) setViewportSize({ w: r.width, h: r.height });
+      else setPageSize({ w: r.width, h: r.height });
     };
     measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
-  }, []);
+    const ResizeObserverCtor = window.ResizeObserver;
+    if (!ResizeObserverCtor) {
+      window.addEventListener('resize', measure);
+      return () => window.removeEventListener('resize', measure);
+    }
+    const ro = new ResizeObserverCtor(measure);
+    ro.observe(target);
+    return () => ro.disconnect();
+  }, [interactive]);
+
+  useEffect(() => {
+    if (interactive) setPageSize(canvasSize);
+  }, [canvasSize, interactive]);
 
   // Debounced onChange
   useEffect(() => {
@@ -354,16 +383,14 @@ export default function EditorCanvas({
   // Slot-Reorder inkl. slotIndex-Swap + Duplicate-Guard + Commit
   const handleReorder = useCallback((from: number, to: number) => {
     if (from === to) return;
-    setItems(prev => {
-      const arr = [...prev];
-      const a = arr[from], b = arr[to];
-      [arr[from], arr[to]] = [b, a];
-      const tmp = a.slotIndex; a.slotIndex = b.slotIndex; b.slotIndex = tmp;
-      return arr;
-    });
+    const arr = items.map(item => ({ ...item }));
+    [arr[from], arr[to]] = [arr[to], arr[from]];
+    const nextItems = arr.map((item, index) => ({ ...item, slotIndex: index }));
+    setItems(nextItems);
+    onStructuralChange?.(nextItems);
     setSelectedIdx(to);
     commitItems();
-  }, [setItems, commitItems]);
+  }, [items, setItems, commitItems, onStructuralChange]);
 
 
   // Autosave (debounced)
@@ -431,6 +458,7 @@ export default function EditorCanvas({
 
   // Keyboard Shortcuts & Nudge & Undo/Redo
   useEffect(() => {
+    if (!interactive) return;
     const handler = (e: KeyboardEvent) => {
       // Undo/Redo
       const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
@@ -509,10 +537,11 @@ export default function EditorCanvas({
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [items, selectedIdx, page.slots, pageSize.w, pageSize.h, gapPx, undo, redo, canUndo, canRedo, setItems, commitItems]);
+  }, [interactive, items, selectedIdx, page.slots, pageSize.w, pageSize.h, gapPx, undo, redo, canUndo, canRedo, setItems, commitItems]);
 
   // Wheel-Zoom (Ctrl optional) mit Cursor-Fixpunkt & Rotation
   useEffect(() => {
+    if (!interactive) return;
     const el = rootRef.current;
     if (!el) return;
     let lastTs = 0;
@@ -566,10 +595,11 @@ export default function EditorCanvas({
 
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel as any);
-  }, [items, selectedIdx, wheelZoomNeedsCtrl, setItems, scheduleCommit]);
+  }, [interactive, items, selectedIdx, wheelZoomNeedsCtrl, setItems, scheduleCommit]);
 
   // Touch-Pinch (2 Pointer) inkl. Fixpunkt
   useEffect(() => {
+    if (!interactive) return;
     const el = rootRef.current;
     if (!el) return;
 
@@ -659,55 +689,69 @@ export default function EditorCanvas({
       el.removeEventListener('pointerup', onPointerUp);
       el.removeEventListener('pointercancel', onPointerUp);
     };
-  }, [items, selectedIdx, setItems, commitItems]);
+  }, [interactive, items, selectedIdx, setItems, commitItems]);
 
   /* ==============================
      Render
      ============================== */
   return (
-    <div className="flex w-full min-w-0 flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-3 rounded-[26px] border border-neutral-200/80 bg-white/90 px-4 py-3 shadow-sm">
-        <Filmstrip
-          items={items}
-          selected={selectedIdx}
-          onSelect={setSelectedIdx}
-          onReorder={handleReorder}
-        />
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={undo}
-            disabled={!canUndo}
-            title="Undo (Ctrl/Cmd+Z)"
-          >
-            Undo
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={redo}
-            disabled={!canRedo}
-            title="Redo (Shift+Ctrl/Cmd+Z • Ctrl+Y)"
-          >
-            Redo
-          </Button>
+    <div className={interactive ? "flex h-full min-h-0 w-full min-w-0 flex-col gap-3" : "h-full w-full min-w-0"}>
+      {interactive && (
+        <div className="flex flex-none flex-wrap items-center gap-3 rounded-[26px] border border-neutral-200/80 bg-white/90 px-4 py-3 shadow-sm">
+          <Filmstrip
+            items={items}
+            selected={selectedIdx}
+            onSelect={setSelectedIdx}
+            onReorder={handleReorder}
+          />
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={undo}
+              disabled={!canUndo}
+              title="Undo (Ctrl/Cmd+Z)"
+            >
+              Undo
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={redo}
+              disabled={!canRedo}
+              title="Redo (Shift+Ctrl/Cmd+Z • Ctrl+Y)"
+            >
+              Redo
+            </Button>
+          </div>
+          <div className="ml-auto flex flex-wrap items-center gap-2 text-xs text-neutral-600">
+            <Badge>Drag to reorder</Badge>
+            <Badge>Wheel to zoom</Badge>
+            {saveState === 'saving' && <Badge>Saving…</Badge>}
+            {saveState === 'saved' && <Badge variant="success">Saved</Badge>}
+            {saveState === 'error' && <Badge variant="warning">Save error</Badge>}
+          </div>
         </div>
-        <div className="ml-auto flex flex-wrap items-center gap-2 text-xs text-neutral-600">
-          <Badge>Drag to reorder</Badge>
-          <Badge>Wheel to zoom</Badge>
-          {saveState === 'saving' && <Badge>Saving…</Badge>}
-          {saveState === 'saved' && <Badge variant="success">Saved</Badge>}
-          {saveState === 'error' && <Badge variant="warning">Save error</Badge>}
-        </div>
-      </div>
+      )}
 
       {/* Page Canvas */}
       <div
-        ref={rootRef}
-        className="relative overflow-hidden rounded-[28px] border border-neutral-200 bg-white shadow-[0_18px_45px_rgba(15,23,42,0.08)]"
-        style={{ width: '100%', maxWidth: '100%', aspectRatio: `${width} / ${height}`, userSelect: 'none' }}
+        ref={viewportRef}
+        className={interactive ? "flex min-h-0 flex-1 items-start justify-center overflow-auto" : "h-full w-full"}
       >
+        <div
+          ref={rootRef}
+          className={interactive
+            ? "relative overflow-hidden rounded-[28px] border border-neutral-200 bg-white shadow-[0_18px_45px_rgba(15,23,42,0.08)]"
+            : "relative h-full w-full overflow-hidden bg-white"}
+          style={{
+            width: interactive ? `${canvasSize.w}px` : '100%',
+            height: interactive ? `${canvasSize.h}px` : '100%',
+            maxWidth: interactive ? '100%' : '100%',
+            maxHeight: interactive ? 'none' : '100%',
+            userSelect: 'none',
+          }}
+        >
         {items.map((it, i) => {
           const slots: Slot[] = Array.isArray(page.slots) ? page.slots : [];
           const s = slots[it.slotIndex] || { x: 0, y: 0, w: 1, h: 1 };
@@ -756,8 +800,9 @@ export default function EditorCanvas({
                 idx={i}
                 item={it as any}
                 snapshot={{ slotLeft, slotTop, slotW, slotH, contentW, contentH, innerPad }}
-                selected={isSel}
+                selected={interactive && isSel}
                 showHud={showHud}
+                interactive={interactive}
                 onSelect={setSelectedIdx}
                 onUpdateItem={(updater) => setItems(list => list.map((m2, idx2) => idx2 === i ? updater(m2 as any) as any : m2))}
                 onCommit={commitItems}
@@ -802,6 +847,7 @@ export default function EditorCanvas({
             )}
           </div>
         )}
+        </div>
       </div>
 
     </div>

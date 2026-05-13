@@ -331,6 +331,39 @@ class BuildPhotoBook implements ShouldQueue
                 json_encode($pagesDoc, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
             );
             logger()->info('PB: pages.json written', ['path' => $cacheDir . '/pages.json', 'pages' => count($pagesForJson)]);
+
+            // ---- Pre-cache all images locally so the editor loads them instantly ----
+            $allPaths = [];
+            foreach ($pagesForJson as $page) {
+                foreach ($page['items'] as $item) {
+                    $p = $item['photo']['path'] ?? null;
+                    if ($p) $allPaths[$p] = true;
+                }
+            }
+            $allPaths = array_keys($allPaths);
+            $total = count($allPaths);
+            if ($total > 0) {
+                $updateProgress(55, 'Caching ' . $total . ' images…');
+                $dav = app(\App\Services\WebDavClient::class);
+                foreach ($allPaths as $i => $imgPath) {
+                    $dest = $cacheDir . DIRECTORY_SEPARATOR . $imgPath;
+                    if (!is_file($dest)) {
+                        try {
+                            $bytes = $dav->download($imgPath);
+                            if ($bytes) {
+                                $dir = dirname($dest);
+                                if (!is_dir($dir)) @mkdir($dir, 0775, true);
+                                @file_put_contents($dest, $bytes);
+                            }
+                        } catch (\Throwable $e) {
+                            logger()->warning('PB: pre-cache failed', ['path' => $imgPath, 'error' => $e->getMessage()]);
+                        }
+                    }
+                    $pct = 55 + (int)(($i + 1) / $total * 44);
+                    $updateProgress($pct, 'Cached ' . ($i + 1) . '/' . $total . ' images');
+                }
+            }
+
             $updateProgress(100, 'pages.json generated — ' . count($pagesForJson) . ' pages ready', 'finished');
             return;
         } else {
