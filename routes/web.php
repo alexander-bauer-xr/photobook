@@ -19,21 +19,17 @@ Route::get('/photobook/asset/{hash}/{path}',
     ->where('path', '.*')
     ->name('photobook.asset');
 
-Route::get('/photobook/preview/{hash}', function (string $hash) {
-    return view('photobook.print', ['hash' => $hash]);
-})->name('photobook.preview');
+Route::get('/photobook/preview/{hash}', [PhotobookController::class, 'preview'])
+    ->name('photobook.preview');
 
 Route::get('/photobook/pdf/{file}', [PhotobookController::class, 'servePdf'])
     ->where('file', '[^/]+\.pdf');
 
 // ── Photobook Editor UI ───────────────────────────────────────────────────────
-Route::get('/photobook', function () {
-    return view('photobook.editor');
-})->name('photobook.editor');
+Route::get('/photobook', [PhotobookController::class, 'editor'])
+    ->name('photobook.editor');
 
 // Catch-all: load editor with a given hash/folder — muss als letztes stehen!
-Route::get('/photobook/{hash}', function (string $hash) {
-    return view('photobook.editor', ['hash' => $hash]);
-})->name('photobook.editor.hash');
-
+Route::get('/photobook/{hash}', [PhotobookController::class, 'editor'])
+    ->name('photobook.editor.hash');
 

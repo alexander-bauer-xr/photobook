@@ -23,14 +23,31 @@ const defaultCoverDateText = () => new Date().toLocaleString('en-US', { month: '
 const selectControlClassName =
   'h-10 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-900 shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-neutral-300';
 
-export default function App() {
-  return <QueryClientProvider client={qc}><Root /></QueryClientProvider>;
+type AlbumRecord = { hash: string; folder: string; count: number; created_at: string };
+
+const isAlbumHash = (value?: string | null) => /^[a-f0-9]{40}$/i.test(value || '');
+
+const albumMatchesKey = (album: AlbumRecord, key: string) => {
+  if (!key) return false;
+  return album.hash === key || album.folder === key;
+};
+
+const albumPrimaryKey = (album: AlbumRecord) => album.folder || album.hash;
+
+const normalizeAssetRel = (value?: string | null): string | null => {
+  if (!value) return null;
+  const cleaned = String(value).trim().replace(/\\/g, '/').replace(/^\/+/, '');
+  return cleaned || null;
+};
+
+export default function App({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
+  return <QueryClientProvider client={qc}><Root initialAlbumKey={initialAlbumKey} /></QueryClientProvider>;
 }
 
-function Root() {
-  const [folder, setFolder] = useState('');
+function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
+  const [folder, setFolder] = useState(initialAlbumKey);
   const [pageIdx, setPageIdx] = useState(0);
-  const [albums, setAlbums] = useState([] as { hash: string; folder: string; count: number; created_at: string }[]);
+  const [albums, setAlbums] = useState([] as AlbumRecord[]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerIdx, setDrawerIdx] = useState(null as number | null);
   const [candidates, setCandidates] = useState([] as { path: string; filename: string; src?: string | null }[]);
@@ -50,9 +67,12 @@ function Root() {
   const [latestPdfUrl, setLatestPdfUrl] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'dirty' | 'saving' | 'saved' | 'error'>('idle');
   const coverItemRef = useRef<any>(null);
   const progressTimer = useRef<number | null>(null);
-  const buildCoverPersistencePayload = (imageRel: string | null, opts?: { item?: any }) => {
+  const saveStatusTimer = useRef<number | null>(null);
+  const suppressNextCanvasDirty = useRef(false);
+  const buildCoverPersistencePayload = (imageRel: string | null, opts?: { item?: any; sourcePath?: string | null }) => {
     if (!imageRel) return null;
     const normalizedTitle = (coverTitle || '').trim();
     const normalizedSubtitle = (coverSubtitle || '').trim();
@@ -64,7 +84,7 @@ function Root() {
       subtitle: normalizedSubtitle,
       date: showDateFlag ? normalizedDate : '',
       show_date: showDateFlag,
-      ...(coverPhotoPath ? { source_path: coverPhotoPath } : {}),
+      ...((opts?.sourcePath || coverPhotoPath) ? { source_path: opts?.sourcePath || coverPhotoPath } : {}),
     };
     const item = opts?.item ?? coverItemRef.current ?? null;
     if (item && typeof item === 'object') {
@@ -97,15 +117,29 @@ function Root() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const templatesQ = useTemplates();
   useEffect(() => { api.getAlbums().then(r => setAlbums(r?.albums || [])).catch(() => { }); }, []);
+  useEffect(() => () => {
+    if (saveStatusTimer.current) window.clearTimeout(saveStatusTimer.current);
+  }, []);
   useEffect(() => {
     if (albums.length === 0) return;
-    const has = albums.some(a => (a.folder || a.hash) === folder);
-    if (!folder || !has) {
-      const first = albums[0];
-      if (first) setFolder(first.folder || first.hash);
+    const matched = albums.find(a => albumMatchesKey(a, folder));
+    if (matched && isAlbumHash(folder) && matched.folder) {
+      setFolder(matched.folder);
+      return;
     }
-  }, [albums]);
-  const { pagesQ: q, pages } = usePages(folder);
+    if (!folder) {
+      const first = albums[0];
+      if (first) setFolder(albumPrimaryKey(first));
+    }
+  }, [albums, folder]);
+  const currentAlbum = useMemo(() => albums.find(a => albumMatchesKey(a, folder)) || null, [albums, folder]);
+  const albumHash = currentAlbum?.hash || (isAlbumHash(folder) ? folder : '');
+  const albumFolder = currentAlbum?.folder || (!isAlbumHash(folder) ? folder : '');
+  const pagesKey = albumHash || folder;
+  const { pagesQ: q, pages } = usePages(pagesKey);
+  useEffect(() => {
+    setPageVersion(v => v + 1);
+  }, [pagesKey]);
   // Build a web URL for cached assets from an absolute path like .../_cache/<hash>/<rel>
   const filePathToAssetUrl = (p?: string | null): string | null => {
     if (!p) return null;
@@ -126,8 +160,9 @@ function Root() {
   };
   // Build a web URL for relative cache asset like images/foo.jpg using album hash
   const relAssetUrl = (hash: string, rel?: string | null): string | null => {
-    if (!hash || !rel) return null;
-    const encRel = String(rel).split('/').map(encodeURIComponent).join('/');
+    const normalizedRel = normalizeAssetRel(rel);
+    if (!hash || !normalizedRel) return null;
+    const encRel = normalizedRel.split('/').map(encodeURIComponent).join('/');
     return `/photobook/asset/${encodeURIComponent(hash)}/${encRel}`;
   };
   // Hydrate cover from REST if present
@@ -162,23 +197,29 @@ function Root() {
     setCoverDateText(computedDateText);
     setCoverShowDate(defaultShowDate);
 
-    const currentAlbum = albums.find(a => (a.folder || a.hash) === folder) || null;
+    const currentAlbum = albums.find(a => albumMatchesKey(a, folder)) || null;
     const albumHashLocal = currentAlbum?.hash || '';
     const fallbackTitle = pickString(cov?.title, opts.cover_title, opts.title);
 
-    const sourcePath = typeof cov?.sourcePath === 'string' && cov.sourcePath.trim() !== '' ? cov.sourcePath.trim() : null;
-    let resolvedSource = sourcePath;
-    if (!resolvedSource && Array.isArray(data?.pages)) {
-      const coverPage = data.pages.find((p: any) => {
+    const coverPage = Array.isArray(data?.pages)
+      ? data.pages.find((p: any) => {
         const id = (p?.id || '').toString().toLowerCase();
         const tpl = (p?.templateId || p?.template || '').toString().toLowerCase();
-        return p?.n === 0 || id === 'cover' || tpl === 'cover';
-      });
-      const coverItem = coverPage?.items?.[0];
-      if (coverItem?.photo?.path && typeof coverItem.photo.path === 'string') {
-        resolvedSource = coverItem.photo.path;
-      }
-    }
+        return id === 'cover' || tpl === 'cover';
+      })
+      : null;
+    const coverItem = Array.isArray(coverPage?.items) ? coverPage.items[0] : null;
+    const itemWebSrc = coverItem?.webSrc || coverItem?.web || coverItem?.src || null;
+    const itemImageRel =
+      normalizeAssetRel(coverItem?.rel)
+      || webAssetRelFromUrl(itemWebSrc)
+      || normalizeAssetRel(coverItem?.photo?.path);
+    const coverImageRel =
+      normalizeAssetRel(cov?.image)
+      || webAssetRelFromUrl(cov?.webSrc)
+      || itemImageRel;
+    const sourcePath = pickString(cov?.sourcePath, cov?.source_path, coverItem?.photo?.path, coverImageRel) || null;
+    const resolvedSource = sourcePath;
     const resolvedFilename = resolvedSource ? ((resolvedSource.split('/') || []).pop() || undefined) : undefined;
 
     const parseAlign = (candidate: any, fallbackPos?: string): { x: number; y: number } => {
@@ -202,26 +243,46 @@ function Root() {
       return { x: 0, y: 0 };
     };
 
-    if (cov && (cov.image || cov.title)) {
-      setCoverTitle(cov.title || fallbackTitle || '');
-      setCoverPath(cov.image || null);
-      setCoverWebSrc(cov.webSrc || relAssetUrl(albumHashLocal, cov.image) || null);
+    if (cov || coverItem || fallbackTitle) {
+      const resolvedWebSrc =
+        cov?.webSrc
+        || itemWebSrc
+        || relAssetUrl(albumHashLocal || (isAlbumHash(folder) ? folder : ''), coverImageRel);
+      setCoverTitle(cov?.title || fallbackTitle || '');
+      setCoverPath(coverImageRel || null);
       setCoverPhotoPath(resolvedSource || null);
+      setCoverWebSrc(prev => {
+        // Bump canvas version when the src URL becomes available for the first time,
+        // so EditorCanvas re-reads the cover item (page identity never changes).
+        if (resolvedWebSrc && !prev) {
+          suppressNextCanvasDirty.current = true;
+          setPageVersion(v => v + 1);
+        }
+        return resolvedWebSrc || null;
+      });
 
-      const align = parseAlign(cov.align, cov.objectPosition);
-      const offset = (cov.offset && typeof cov.offset === 'object') ? {
-        x: Number.isFinite(Number(cov.offset.x)) ? Number(cov.offset.x) : 0,
-        y: Number.isFinite(Number(cov.offset.y)) ? Number(cov.offset.y) : 0,
+      const align = parseAlign(cov?.align ?? coverItem?.align, cov?.objectPosition ?? coverItem?.objectPosition);
+      const offsetSource = (cov?.offset && typeof cov.offset === 'object') ? cov.offset : coverItem?.offset;
+      const offset = (offsetSource && typeof offsetSource === 'object') ? {
+        x: Number.isFinite(Number(offsetSource.x)) ? Number(offsetSource.x) : 0,
+        y: Number.isFinite(Number(offsetSource.y)) ? Number(offsetSource.y) : 0,
       } : { x: 0, y: 0 };
-      const zoomVal = Number.isFinite(Number(cov.zoom)) && Number(cov.zoom) > 0
-        ? Number(cov.zoom)
-        : (Number.isFinite(Number(cov.scale)) && Number(cov.scale) > 0 ? Number(cov.scale) : 1);
-      const rotationVal = Number.isFinite(Number(cov.rotation))
-        ? Number(cov.rotation)
-        : (Number.isFinite(Number(cov.rotate)) ? Number(cov.rotate) : 0);
-      const coverFit = (cov.fit === 'contain' || cov.crop === 'contain') ? 'contain' : 'cover';
-      const objectPosition = typeof cov.objectPosition === 'string' && cov.objectPosition.trim() !== ''
-        ? cov.objectPosition.trim()
+      const zoomVal = Number.isFinite(Number(cov?.zoom)) && Number(cov?.zoom) > 0
+        ? Number(cov?.zoom)
+        : (Number.isFinite(Number(coverItem?.zoom)) && Number(coverItem?.zoom) > 0
+          ? Number(coverItem?.zoom)
+          : (Number.isFinite(Number(cov?.scale)) && Number(cov?.scale) > 0
+            ? Number(cov?.scale)
+            : (Number.isFinite(Number(coverItem?.scale)) && Number(coverItem?.scale) > 0 ? Number(coverItem?.scale) : 1)));
+      const rotationVal = Number.isFinite(Number(cov?.rotation))
+        ? Number(cov?.rotation)
+        : (Number.isFinite(Number(coverItem?.rotation))
+          ? Number(coverItem?.rotation)
+          : (Number.isFinite(Number(cov?.rotate)) ? Number(cov?.rotate)
+            : (Number.isFinite(Number(coverItem?.rotate)) ? Number(coverItem?.rotate) : 0)));
+      const coverFit = (cov?.fit === 'contain' || cov?.crop === 'contain' || coverItem?.fit === 'contain' || coverItem?.crop === 'contain') ? 'contain' : 'cover';
+      const objectPosition = typeof (cov?.objectPosition ?? coverItem?.objectPosition) === 'string' && String(cov?.objectPosition ?? coverItem?.objectPosition).trim() !== ''
+        ? String(cov?.objectPosition ?? coverItem?.objectPosition).trim()
         : `${Math.round(50 + align.x * 50)}% ${Math.round(50 + align.y * 50)}%`;
       coverItemRef.current = {
         slotIndex: 0,
@@ -230,16 +291,20 @@ function Root() {
         offset,
         zoom: zoomVal,
         rotation: rotationVal,
-        auto: cov.auto === true,
+        auto: (cov?.auto ?? coverItem?.auto) === true,
         crop: coverFit,
-        scale: Number.isFinite(Number(cov.scale)) && Number(cov.scale) > 0 ? Number(cov.scale) : zoomVal,
-        rotate: Number.isFinite(Number(cov.rotate)) ? Number(cov.rotate) : rotationVal,
+        scale: Number.isFinite(Number(cov?.scale)) && Number(cov?.scale) > 0
+          ? Number(cov?.scale)
+          : (Number.isFinite(Number(coverItem?.scale)) && Number(coverItem?.scale) > 0 ? Number(coverItem?.scale) : zoomVal),
+        rotate: Number.isFinite(Number(cov?.rotate))
+          ? Number(cov?.rotate)
+          : (Number.isFinite(Number(coverItem?.rotate)) ? Number(coverItem?.rotate) : rotationVal),
         objectPosition,
         photo: resolvedSource ? {
           path: resolvedSource,
           ...(resolvedFilename ? { filename: resolvedFilename } : {}),
         } : null,
-        src: cov.webSrc || relAssetUrl(albumHashLocal, cov.image) || null,
+        src: resolvedWebSrc || null,
       };
     } else {
       setCoverTitle(fallbackTitle || '');
@@ -262,7 +327,7 @@ function Root() {
       if (!p) return false;
       const id = (p.id || '').toString().toLowerCase();
       const tpl = (p.templateId || p.template || '').toString().toLowerCase();
-      return p.n === 0 || id === 'cover' || tpl === 'cover';
+      return id === 'cover' || tpl === 'cover';
     };
     // If album already contains a real page 0 cover, use it as-is
     if (Array.isArray(arr) && arr.length && isCoverPage(arr[0])) {
@@ -277,6 +342,11 @@ function Root() {
               path: originalPath,
               ...(originalFilename ? { filename: originalFilename } : {}),
             };
+          }
+          // Preserve runtime image dimensions so drag/zoom work after pageVersion bumps
+          if (coverItemRef.current?._iw) {
+            next._iw = coverItemRef.current._iw;
+            next._ih = coverItemRef.current._ih;
           }
           return next;
         }
@@ -297,6 +367,8 @@ function Root() {
       id: 'cover', n: 0, templateId: 'cover',
       slots: coverSlots,
       items: [{
+        // Preserve runtime image dimensions so drag/zoom work after pageVersion bumps
+        ...(coverItemRef.current?._iw ? { _iw: coverItemRef.current._iw, _ih: coverItemRef.current._ih } : {}),
         slotIndex: 0,
         src: synthesizedSrc || undefined,
         photo: originalPath ? { path: originalPath, ...(originalFilename ? { filename: originalFilename } : {}) } : null,
@@ -331,12 +403,22 @@ function Root() {
       title: title ? title : null,
       subtitle: subtitle ? subtitle : null,
       date: date ? date : null,
-      hasPhoto: !!(coverWebSrc || coverPath || coverPhotoPath),
+      hasPhoto: !!(coverWebSrc || coverPath || coverPhotoPath || page?.items?.[0]?.src || page?.items?.[0]?.photo?.path),
     };
-  }, [coverTitle, coverSubtitle, coverDateText, coverShowDate, coverWebSrc, coverPath, coverPhotoPath]);
+  }, [coverTitle, coverSubtitle, coverDateText, coverShowDate, coverWebSrc, coverPath, coverPhotoPath, page]);
 
-  const currentAlbum = useMemo(() => albums.find(a => (a.folder || a.hash) === folder) || null, [albums, folder]);
-  const albumHash = currentAlbum?.hash || '';
+  const currentCoverItem = () => coverItemRef.current ?? page?.items?.[0] ?? null;
+  const currentCoverImageRel = () => {
+    const item = currentCoverItem();
+    return (
+      coverPath
+      || webAssetRelFromUrl(coverWebSrc)
+      || normalizeAssetRel(item?.rel)
+      || webAssetRelFromUrl(item?.webSrc || item?.web || item?.src)
+      || normalizeAssetRel(item?.photo?.path)
+      || null
+    );
+  };
 
   const handleExportPdf = async () => {
     if (!albumHash) return;
@@ -364,6 +446,103 @@ function Root() {
   const hasPage = !!page;
   const canEditPage = hasPage && !isLoading && !isError;
   const pageLabel = pageIdx === 0 ? 'Cover' : (page ? `Page ${page.n}` : `Page ${pageIdx + 1}`)
+  const clamp01 = (v: number, lo = -1, hi = 1) => Math.max(lo, Math.min(hi, v));
+  const isPos = (v: any) => Number.isFinite(v) && v > 0;
+  const isCoverPage = (target?: any) => {
+    if (!target) return false;
+    const id = (target.id || '').toString().toLowerCase();
+    const tpl = (target.templateId || target.template || '').toString().toLowerCase();
+    return id === 'cover' || tpl === 'cover';
+  };
+  const pageIdentity = (target: any) => {
+    if (isCoverPage(target)) return 'cover';
+    const n = Math.max(1, Number(target?.n || 1));
+    return target?.id || `page-${n}`;
+  };
+  const setSavedSoon = () => {
+    if (saveStatusTimer.current) window.clearTimeout(saveStatusTimer.current);
+    setSaveStatus('saved');
+    saveStatusTimer.current = window.setTimeout(() => setSaveStatus('idle'), 1400);
+  };
+  const persistWithStatus = async (task: () => Promise<any>) => {
+    if (saveStatusTimer.current) window.clearTimeout(saveStatusTimer.current);
+    setSaveStatus('saving');
+    try {
+      const result = await task();
+      setSavedSoon();
+      return result;
+    } catch (error) {
+      setSaveStatus('error');
+      throw error;
+    }
+  };
+  const normalizeItemForSave = (it: any) => {
+    const fit = it.fit === 'contain' ? 'contain' : 'cover';
+    const align = {
+      x: clamp01(Number(it.align?.x ?? 0)),
+      y: clamp01(Number(it.align?.y ?? 0)),
+    };
+    const offset = {
+      x: Number.isFinite(Number(it.offset?.x)) ? Number(it.offset?.x) : 0,
+      y: Number.isFinite(Number(it.offset?.y)) ? Number(it.offset?.y) : 0,
+    };
+    const zoom = isPos(it.zoom) ? Number(it.zoom) : (isPos(it.scale) ? Number(it.scale) : 1);
+    const rotation = Number.isFinite(Number(it.rotation))
+      ? Number(it.rotation)
+      : (Number.isFinite(Number(it.rotate)) ? Number(it.rotate) : 0);
+    const caption =
+      typeof it.caption === 'string'
+        ? it.caption
+        : typeof it.caption === 'number'
+          ? String(it.caption)
+          : undefined;
+    const objectPosition = `${Math.round(50 + align.x * 50)}% ${Math.round(50 + align.y * 50)}%`;
+
+    return {
+      slotIndex: Number.isFinite(Number(it.slotIndex)) ? Number(it.slotIndex) : 0,
+      fit,
+      align,
+      offset,
+      zoom,
+      rotation,
+      auto: !!it.auto,
+      ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {}),
+      ...(it.src ? { src: it.src } : {}),
+      ...((it as any).webSrc ? { webSrc: (it as any).webSrc } : {}),
+      ...((it as any).web ? { web: (it as any).web } : {}),
+      ...(caption !== undefined ? { caption } : {}),
+      crop: fit,
+      objectPosition,
+      scale: zoom,
+      rotate: rotation,
+    };
+  };
+  const buildPageForSave = (target: any, itemsOverride?: any[]) => {
+    const cover = isCoverPage(target);
+    const n = cover ? 0 : Math.max(1, Number(target?.n || 1));
+    const items = Array.isArray(itemsOverride) ? itemsOverride : (Array.isArray(target?.items) ? target.items : []);
+
+    return {
+      ...target,
+      id: cover ? 'cover' : pageIdentity({ ...target, n }),
+      n,
+      templateId: cover ? 'cover' : (target?.templateId || target?.template || null),
+      slots: Array.isArray(target?.slots) ? target.slots : [],
+      items: items.map(normalizeItemForSave),
+      ...(target?.layoutFeedback ? { layoutFeedback: target.layoutFeedback } : {}),
+    };
+  };
+  const persistPage = async (target: any, itemsOverride?: any[]) => {
+    if (!albumHash || !target) throw new Error('Album hash is not ready yet.');
+    const payload = buildPageForSave(target, itemsOverride);
+    await persistWithStatus(() => PB.savePage(albumHash, payload));
+  };
+  const persistCover = async (imageRel = currentCoverImageRel(), item = currentCoverItem(), sourcePath?: string | null) => {
+    if (!albumHash) throw new Error('Album hash is not ready yet.');
+    const coverPayload = buildCoverPersistencePayload(imageRel, { item, sourcePath });
+    if (!coverPayload) throw new Error('Choose a cover photo before saving.');
+    await persistWithStatus(() => PB.setCover(albumHash, coverPayload));
+  };
 
   const updateItemObjectPos = (idx: number, xPct: number, yPct: number) => {
     if (!page) return;
@@ -393,63 +572,16 @@ function Root() {
     // reassign slotIndex to match new order (item i goes to slot i)
     page.items = arr.map((it, i) => ({ ...it, slotIndex: i }));
     setPageVersion(v => v + 1);
+    void persistPage(page).catch(() => {});
   };
-
-  const clamp01 = (v: number, lo = -1, hi = 1) => Math.max(lo, Math.min(hi, v));
-  const isPos = (v: any) => Number.isFinite(v) && v > 0;
 
   const save = async () => {
     if (!page) return;
-
-    await api.savePage({
-      folder,
-      page: page.n,
-      items: page.items.map((it: any) => {
-        // canonical (preferred by PHP builder)
-        const fit = it.fit === 'contain' ? 'contain' : 'cover';
-        const align = {
-          x: clamp01(Number(it.align?.x ?? 0)),
-          y: clamp01(Number(it.align?.y ?? 0)),
-        };
-        const offset = {
-          x: Number.isFinite(Number(it.offset?.x)) ? Number(it.offset?.x) : 0,
-          y: Number.isFinite(Number(it.offset?.y)) ? Number(it.offset?.y) : 0,
-        };
-        const zoom = isPos(it.zoom) ? Number(it.zoom) : (isPos(it.scale) ? Number(it.scale) : 1);
-        const rotation = Number.isFinite(Number(it.rotation))
-          ? Number(it.rotation)
-          : (Number.isFinite(Number(it.rotate)) ? Number(it.rotate) : 0);
-        const auto = !!it.auto;
-        const caption =
-          typeof it.caption === 'string'
-            ? it.caption
-            : typeof it.caption === 'number'
-              ? String(it.caption)
-              : undefined;
-
-        // legacy (keep for back-compat)
-        const objectPosition = `${Math.round(50 + align.x * 50)}% ${Math.round(50 + align.y * 50)}%`;
-
-        return {
-          slotIndex: it.slotIndex,
-
-          // --- canonical ---
-          fit, align, offset, zoom, rotation, auto,
-          ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {}),
-          ...(it.src ? { src: it.src } : {}),
-          ...(caption !== undefined ? { caption } : {}),
-
-          // --- legacy ---
-          crop: fit,
-          objectPosition,
-          scale: zoom,
-          rotate: rotation,
-        };
-      }),
-      templateId: page.templateId || null,
-    });
-
-    alert('Saved page overrides');
+    if (pageIdx === 0) {
+      await persistCover();
+      return;
+    }
+    await persistPage(page);
   };
 
   // open replace drawer
@@ -461,7 +593,7 @@ function Root() {
     try {
       // For cover (index 0), use page 1 candidates
       const effectivePage = pageIdx === 0 ? 1 : (page?.n || 1);
-      const r = await api.getCandidates(folder, effectivePage);
+      const r = await api.getCandidates(albumFolder || folder, effectivePage);
       setCandidates(r.candidates || []);
     } finally {
       setCandLoading(false);
@@ -473,7 +605,7 @@ function Root() {
     setCandLoading(true);
     try {
       const effectivePage = pageIdx === 0 ? 1 : (page?.n || 1);
-      const r = await api.getCandidates(folder, effectivePage, true);
+      const r = await api.getCandidates(albumFolder || folder, effectivePage, true);
       setCandidates(r.candidates || []);
       setShowingAllCandidates(true);
     } finally {
@@ -489,37 +621,45 @@ function Root() {
 
     // Cover: only update the synthetic cover state
     if (pageIdx === 0) {
-      const web = cand.src || null;
-      const rel = webAssetRelFromUrl(web);
-      if (rel) {
-        setCoverPath(rel);
-      }
+      const rel = webAssetRelFromUrl(cand.src || null) || normalizeAssetRel(cand.path);
+      const web = cand.src || relAssetUrl(albumHash, rel) || filePathToAssetUrl(cand.path) || null;
+      if (rel) setCoverPath(rel);
       setCoverWebSrc(web);
       setCoverPhotoPath(cand.path || null);
       const prevItem = coverItemRef.current && typeof coverItemRef.current === 'object' ? coverItemRef.current : {};
+      const preserve = opts?.preserveCrop !== false;
       const nextPhoto = cand.path ? {
         path: cand.path,
         ...(cand.filename ? { filename: cand.filename } : {}),
       } : (prevItem.photo ?? null);
-      coverItemRef.current = {
+      const nextItem = {
         slotIndex: 0,
-        fit: prevItem.fit === 'contain' ? 'contain' : 'cover',
-        align: prevItem.align ?? { x: 0, y: 0 },
-        offset: prevItem.offset ?? { x: 0, y: 0 },
-        zoom: Number.isFinite(Number(prevItem.zoom)) && Number(prevItem.zoom) > 0 ? Number(prevItem.zoom) : 1,
-        rotation: Number.isFinite(Number(prevItem.rotation)) ? Number(prevItem.rotation) : 0,
-        auto: prevItem.auto === true,
-        crop: typeof prevItem.crop === 'string' ? prevItem.crop : (prevItem.fit === 'contain' ? 'contain' : 'cover'),
-        scale: Number.isFinite(Number(prevItem.scale)) && Number(prevItem.scale) > 0 ? Number(prevItem.scale)
-          : (Number.isFinite(Number(prevItem.zoom)) && Number(prevItem.zoom) > 0 ? Number(prevItem.zoom) : 1),
-        rotate: Number.isFinite(Number(prevItem.rotate)) ? Number(prevItem.rotate)
-          : (Number.isFinite(Number(prevItem.rotation)) ? Number(prevItem.rotation) : 0),
-        objectPosition: typeof prevItem.objectPosition === 'string' ? prevItem.objectPosition : '50% 50%',
+        fit: preserve && prevItem.fit === 'contain' ? 'contain' : 'cover',
+        align: preserve ? (prevItem.align ?? { x: 0, y: 0 }) : { x: 0, y: 0 },
+        offset: preserve ? (prevItem.offset ?? { x: 0, y: 0 }) : { x: 0, y: 0 },
+        zoom: preserve && Number.isFinite(Number(prevItem.zoom)) && Number(prevItem.zoom) > 0 ? Number(prevItem.zoom) : 1,
+        rotation: preserve && Number.isFinite(Number(prevItem.rotation)) ? Number(prevItem.rotation) : 0,
+        auto: false,
+        crop: preserve && typeof prevItem.crop === 'string' ? prevItem.crop : (preserve && prevItem.fit === 'contain' ? 'contain' : 'cover'),
+        scale: preserve
+          ? (Number.isFinite(Number(prevItem.scale)) && Number(prevItem.scale) > 0 ? Number(prevItem.scale)
+            : (Number.isFinite(Number(prevItem.zoom)) && Number(prevItem.zoom) > 0 ? Number(prevItem.zoom) : 1))
+          : 1,
+        rotate: preserve
+          ? (Number.isFinite(Number(prevItem.rotate)) ? Number(prevItem.rotate)
+            : (Number.isFinite(Number(prevItem.rotation)) ? Number(prevItem.rotation) : 0))
+          : 0,
+        objectPosition: preserve && typeof prevItem.objectPosition === 'string' ? prevItem.objectPosition : '50% 50%',
         photo: nextPhoto,
         src: web,
       };
+      coverItemRef.current = nextItem;
+      if (page?.items?.[0]) {
+        page.items[0] = { ...page.items[0], ...nextItem };
+      }
       setDrawerOpen(false);
       setPageVersion(v => v + 1);
+      void persistCover(rel, nextItem, cand.path || null).catch(() => {});
       return;
     }
 
@@ -554,13 +694,15 @@ function Root() {
 
     setDrawerOpen(false);
     setPageVersion(v => v + 1);
+    void persistPage(page).catch(() => {});
   };
 
   const handleBuild = async () => {
-    if (!folder) return;
+    const buildFolder = albumFolder || folder;
+    if (!buildFolder) return;
     const hasAlbumHash = !!(albumHash && /^[a-f0-9]{40}$/i.test(albumHash));
-    const coverImageRelForApi = coverPath || webAssetRelFromUrl(coverWebSrc) || null;
-    const coverPayloadForApi = buildCoverPersistencePayload(coverImageRelForApi, { item: coverItemRef.current });
+    const coverImageRelForApi = currentCoverImageRel();
+    const coverPayloadForApi = buildCoverPersistencePayload(coverImageRelForApi, { item: currentCoverItem() });
 
     try {
       if (hasAlbumHash && coverPayloadForApi) {
@@ -573,7 +715,7 @@ function Root() {
       setBuildProgress(0);
       setBuildMessage('Starting…');
 
-      const payload: Record<string, string> = { folder };
+      const payload: Record<string, string> = { folder: buildFolder };
       if (coverTitle) payload.title = coverTitle;
       if (coverImageRelForApi) payload.cover_image = coverImageRelForApi;
 
@@ -662,6 +804,23 @@ function Root() {
         </div>
       )}
 
+      {/* ── Export Overlay ──────────────────────────────────────────── */}
+      {isExporting && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-2xl p-10 flex flex-col items-center gap-6 w-[480px] max-w-[90vw]">
+            <div className="text-2xl font-semibold text-neutral-800">Exporting PDF…</div>
+            <div className="flex items-center gap-3">
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-700" />
+              <span className="text-sm text-neutral-500">Rendering pages with Playwright</span>
+            </div>
+            <p className="text-sm text-neutral-500 text-center">
+              All pages are being rendered to a print-ready PDF.<br />
+              This may take up to a minute.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* ── Top bar ─────────────────────────────────────────────────── */}
       <header className="flex-none border-b border-neutral-200/70 bg-white/80 px-4 py-4 backdrop-blur-sm">
         <div className="flex min-w-0 flex-wrap items-center gap-3">
@@ -701,6 +860,10 @@ function Root() {
             {isFetchingPages && (
               <Badge>Loading pages…</Badge>
             )}
+            {saveStatus === 'dirty' && <Badge variant="warning">Unsaved edits</Badge>}
+            {saveStatus === 'saving' && <Badge>Saving…</Badge>}
+            {saveStatus === 'saved' && <Badge variant="success">Saved</Badge>}
+            {saveStatus === 'error' && <Badge variant="warning">Save failed</Badge>}
             {hasPages && (
               <>
                 <Separator orientation="vertical" className="mx-1 hidden h-8 md:block" />
@@ -726,18 +889,10 @@ function Root() {
                 <Separator orientation="vertical" className="mx-1 hidden h-8 md:block" />
                 <Button
                   variant="brand"
-                  disabled={!canEditPage}
+                  disabled={!canEditPage || (pageIdx === 0 && !albumHash)}
                   onClick={async () => {
-                    if (pageIdx === 0) {
-                      const coverImageRel = coverPath || webAssetRelFromUrl(coverWebSrc) || null;
-                      if (!coverImageRel) { alert('Choose a cover photo before saving.'); return; }
-                      const coverPayload = buildCoverPersistencePayload(coverImageRel, { item: coverItemRef.current ?? (page?.items?.[0] ?? null) });
-                      if (!coverPayload) { alert('Unable to build cover payload.'); return; }
-                      try { await PB.setCover(albumHash, coverPayload); alert('Saved cover'); }
-                      catch { alert('Failed to save cover'); }
-                    } else {
-                      await save();
-                    }
+                    try { await save(); }
+                    catch (error) { alert(error instanceof Error ? error.message : 'Failed to save'); }
                   }}
                 >
                   {pageIdx === 0 ? 'Save cover' : 'Save page'}
@@ -768,7 +923,6 @@ function Root() {
             <CardContent className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.85fr)_auto]">
               <div className="xl:col-span-full">
                 <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-neutral-500">Cover</div>
-                <div className="mt-1 text-sm text-neutral-700">Fine-tune the front cover metadata and hero image.</div>
               </div>
               <div className="min-w-0">
                 <Label htmlFor="cover-title" className="mb-2 block text-xs uppercase tracking-[0.12em] text-neutral-500">
@@ -777,7 +931,7 @@ function Root() {
                 <Input
                   id="cover-title"
                   value={coverTitle}
-                  onChange={e => setCoverTitle(e.target.value)}
+                  onChange={e => { setCoverTitle(e.target.value); setSaveStatus('dirty'); }}
                   placeholder="Cover title"
                 />
               </div>
@@ -788,7 +942,7 @@ function Root() {
                 <Input
                   id="cover-subtitle"
                   value={coverSubtitle}
-                  onChange={e => setCoverSubtitle(e.target.value)}
+                  onChange={e => { setCoverSubtitle(e.target.value); setSaveStatus('dirty'); }}
                   placeholder="Optional"
                 />
               </div>
@@ -799,7 +953,7 @@ function Root() {
                 <Input
                   id="cover-date"
                   value={coverDateText}
-                  onChange={e => setCoverDateText(e.target.value)}
+                  onChange={e => { setCoverDateText(e.target.value); setSaveStatus('dirty'); }}
                   placeholder="e.g. Summer 2025"
                   disabled={!coverShowDate}
                 />
@@ -812,17 +966,11 @@ function Root() {
                       const next = checked === true;
                       setCoverShowDate(next);
                       if (next && !(coverDateText || '').trim()) setCoverDateText(defaultCoverDateText());
+                      setSaveStatus('dirty');
                     }}
                   />
                   <span className="text-sm font-medium text-neutral-700">Show date</span>
                 </label>
-                <Button
-                  variant="outline"
-                  disabled={!canEditPage}
-                  onClick={() => openReplace(0)}
-                >
-                  Choose photo
-                </Button>
                 {coverWebSrc ? <img src={coverWebSrc} alt="cover" className="h-12 rounded-2xl border border-neutral-200" /> : null}
               </div>
             </CardContent>
@@ -831,7 +979,7 @@ function Root() {
       )}
 
       {/* ── Main content area ───────────────────────────────────────── */}
-      <main className="flex min-w-0 flex-1 overflow-hidden">
+      <main className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         {/* Empty / build-required state */}
         {!hasPages && !isLoading && (
           <div className="flex flex-1 items-center justify-center p-6">
@@ -877,15 +1025,14 @@ function Root() {
         {/* Editor + Sidebar */}
         {hasPages && (
           <>
-            <div className="min-w-0 flex-1 overflow-auto p-4">
+            <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden p-3">
               {!page ? (
                 <div className="flex h-full items-center justify-center text-sm text-neutral-500">No page selected.</div>
               ) : (
-                <div className="flex min-h-full min-w-0 flex-col items-stretch justify-center rounded-[36px] border border-neutral-200/80 bg-[radial-gradient(circle_at_top,_rgba(191,219,254,0.28),_transparent_34%),linear-gradient(180deg,_rgba(255,255,255,0.96),_rgba(248,250,252,0.96))] p-6 shadow-xl shadow-blue-100/20">
-                  <div className="mb-5 flex w-full flex-wrap items-center justify-between gap-3">
+                <div className="flex h-full min-h-0 w-full min-w-0 flex-col items-stretch rounded-[36px] border border-neutral-200/80 bg-[radial-gradient(circle_at_top,_rgba(191,219,254,0.28),_transparent_34%),linear-gradient(180deg,_rgba(255,255,255,0.96),_rgba(248,250,252,0.96))] p-4 shadow-xl shadow-blue-100/20">
+                  <div className="mb-3 flex flex-none w-full flex-wrap items-center justify-between gap-3">
                     <div>
                       <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-neutral-500">Workspace Stage</div>
-                      <div className="mt-1 text-sm text-neutral-600">Zentriert, ruhiger und stabiler beim Bearbeiten.</div>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge>{pageLabel}</Badge>
@@ -899,7 +1046,11 @@ function Root() {
                     onChange={(items) => {
                       if (page) {
                         page.items = items as any;
-                        setPageVersion(v => v + 1);
+                        if (suppressNextCanvasDirty.current) {
+                          suppressNextCanvasDirty.current = false;
+                        } else {
+                          setSaveStatus('dirty');
+                        }
                       }
                       if (pageIdx === 0 && Array.isArray(items) && items.length) {
                         const first = items[0] as any;
@@ -912,31 +1063,22 @@ function Root() {
                         coverItemRef.current = { ...existing, ...(first ? { ...first } : {}), slotIndex: 0, photo };
                       }
                     }}
+                    onStructuralChange={(items) => {
+                      if (!page) return;
+                      suppressNextCanvasDirty.current = true;
+                      window.setTimeout(() => { suppressNextCanvasDirty.current = false; }, 250);
+                      page.items = items as any;
+                      setPageVersion(v => v + 1);
+                      void persistPage(page, items as any).catch(() => {});
+                    }}
                     onSave={async (items: any[]) => {
                       if (!page) return;
-                      await api.savePage({
-                        folder,
-                        page: page.n,
-                        items: items.map((it: any) => {
-                          const fit = it.fit === 'contain' ? 'contain' : 'cover';
-                          const align = { x: clamp01(Number(it.align?.x ?? 0)), y: clamp01(Number(it.align?.y ?? 0)) };
-                          const offset = { x: Number(it.offset?.x) || 0, y: Number(it.offset?.y) || 0 };
-                          const zoom = isPos(it.zoom) ? Number(it.zoom) : 1;
-                          const rotation = Number.isFinite(Number(it.rotation)) ? Number(it.rotation) : 0;
-                          const objectPosition = `${Math.round(50 + align.x * 50)}% ${Math.round(50 + align.y * 50)}%`;
-                          const caption = typeof it.caption === 'string' ? it.caption : typeof it.caption === 'number' ? String(it.caption) : undefined;
-                          return {
-                            slotIndex: it.slotIndex,
-                            fit, align, offset, zoom, rotation, auto: !!it.auto,
-                            ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {}),
-                            ...(it.src ? { src: it.src } : {}),
-                            ...(caption !== undefined ? { caption } : {}),
-                            crop: fit, objectPosition, scale: zoom, rotate: rotation,
-                          };
-                        }),
-                        templateId: page.templateId || null,
-                      });
-                      alert('Saved page overrides');
+                      if (pageIdx === 0) {
+                        const first = Array.isArray(items) ? items[0] : currentCoverItem();
+                        await persistCover(currentCoverImageRel(), first);
+                      } else {
+                        await persistPage(page, items as any);
+                      }
                     }}
                   />
                 </div>
@@ -952,6 +1094,7 @@ function Root() {
                 if (!existing) return;
                 page.items[idx] = { ...existing, ...changes };
                 setPageVersion(v => v + 1);
+                setSaveStatus('dirty');
               }}
               onTemplateChange={async (tpl) => {
                 if (!page || pageIdx === 0) return;
@@ -970,8 +1113,27 @@ function Root() {
                     setPageVersion(v => v + 1);
                   }
                 } catch { }
-                await api.overrideTemplate({ folder, page: page.n, templateId: tpl });
-                alert('Template set to ' + tpl);
+                await persistPage(page).catch(() => {});
+              }}
+              onLayoutPreferenceChange={async (preferred) => {
+                if (!page || pageIdx === 0 || !albumHash) return;
+                const templateId = page.templateId || page.template || '';
+                if (!templateId) return;
+                const nextFeedback = {
+                  preferred,
+                  templateId: preferred ? templateId : null,
+                  reason: preferred ? 'user_preferred_layout' : null,
+                  updated_at: new Date().toISOString(),
+                };
+                page.layoutFeedback = nextFeedback;
+                setPageVersion(v => v + 1);
+                await persistWithStatus(() => PB.saveLayoutFeedback(albumHash, {
+                  pageId: pageIdentity(page),
+                  page: page.n,
+                  action: preferred ? 'prefer_layout' : 'clear_preferred_layout',
+                  templateId,
+                  reason: 'user_preferred_layout',
+                })).catch(() => {});
               }}
             />
           </>

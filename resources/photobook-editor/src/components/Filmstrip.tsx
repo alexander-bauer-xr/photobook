@@ -24,14 +24,14 @@ export default function Filmstrip({
   const getSrc = (it: FilmstripItem) => (it as any).webSrc || (it as any).web || it.src || '';
 
   return (
-    <div className="flex gap-2 py-2 bg-neutral-100 rounded items-center overflow-x-auto">
+    <div className="flex gap-3 py-2 bg-neutral-100 rounded items-center overflow-x-auto">
       {items.map((it, i) => {
         const u = getSrc(it);
         return (
           <div
             key={i}
             className={[
-              'relative w-16 h-16 rounded overflow-hidden border cursor-pointer select-none',
+              'relative h-20 w-20 shrink-0 rounded-xl overflow-hidden border cursor-pointer select-none md:h-24 md:w-24',
               selected === i ? 'border-blue-500 ring-2 ring-blue-300' : 'border-neutral-300',
               dragIdx === i ? 'opacity-50' : '',
               overIdx === i ? 'outline outline-2 outline-green-500' : ''

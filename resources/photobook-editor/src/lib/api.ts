@@ -37,9 +37,11 @@ export interface SettingsResponse {
 export const PB = {
   getPages: (hash: string) => api<any>(`/api/photobook/pages/${hash}`),
   patchPages: (hash: string, patch: any) => api(`/api/photobook/pages/${hash}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  savePage: (hash: string, page: any) => api<{ ok: boolean }>(`/api/photobook/pages/${hash}`, { method: 'PATCH', body: JSON.stringify({ pages: [page] }) }),
   addPage: (hash: string, page: any) => api(`/api/photobook/pages/${hash}/page`, { method: 'POST', body: JSON.stringify(page) }),
   deletePage: (hash: string, id: string) => api(`/api/photobook/pages/${hash}/page/${id}`, { method: 'DELETE' }),
   setCover: (hash: string, payload: any) => api(`/api/photobook/cover/${hash}`, { method: 'POST', body: JSON.stringify(payload) }),
+  saveLayoutFeedback: (hash: string, payload: any) => api<{ ok: boolean; feedback?: any }>(`/api/photobook/feedback/${hash}`, { method: 'POST', body: JSON.stringify(payload) }),
   build: (hash: string, payload: any) => api(`/api/photobook/build/${hash}`, { method: 'POST', body: JSON.stringify(payload) }),
   buildByFolder: (payload: any) => api(`/api/photobook/build-folder`, { method: 'POST', body: JSON.stringify(payload) }) as Promise<{ ok: boolean; status: string; hash: string }>,
   progress: (hash: string) => api(`/api/photobook/progress/${hash}`),
