@@ -40,7 +40,7 @@ export default function Sidebar({ page, onSwap, onReplace, onTemplateChange, onL
   const isCover = page?.id === 'cover' || currentTemplateId === 'cover';
   return (
     <aside className="flex h-full min-h-0 w-[22rem] shrink-0 border-l border-neutral-200/80 bg-neutral-50/60 p-4 backdrop-blur-sm">
-      <div className="flex h-full min-h-0 flex-col gap-4">
+      <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-4">
         <Card className="rounded-[26px] border-neutral-200/80 shadow-sm">
           <CardHeader className="pb-4">
             <div className="flex items-start justify-between gap-3">

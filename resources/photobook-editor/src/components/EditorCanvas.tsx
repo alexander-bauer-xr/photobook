@@ -142,6 +142,8 @@ type Props = {
    showHud?: boolean;
    interactive?: boolean;
    coverMeta?: CoverMeta;
+   /** When set, bypasses ResizeObserver and uses these dimensions as pageSize (for bleed-scaled print mode). */
+   pageSizeOverride?: { w: number; h: number };
  };
 
 /* =========================================================
@@ -291,6 +293,7 @@ export default function EditorCanvas({
   showHud = true,
   interactive = true,
   coverMeta,
+  pageSizeOverride,
 }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -351,6 +354,10 @@ export default function EditorCanvas({
 
   // Größe messen
   useEffect(() => {
+    // In non-interactive mode with an explicit override, skip the ResizeObserver
+    // (the CSS scale transform would make getBoundingClientRect report the wrong size).
+    if (!interactive && pageSizeOverride && pageSizeOverride.w > 0) return;
+
     const target = interactive ? viewportRef.current : rootRef.current;
     if (!target) return;
     const measure = () => {
@@ -367,7 +374,14 @@ export default function EditorCanvas({
     const ro = new ResizeObserverCtor(measure);
     ro.observe(target);
     return () => ro.disconnect();
-  }, [interactive]);
+  }, [interactive, pageSizeOverride]);
+
+  // Apply explicit pageSize override (used in bleed-scaled print mode)
+  useEffect(() => {
+    if (!interactive && pageSizeOverride && pageSizeOverride.w > 0) {
+      setPageSize(pageSizeOverride);
+    }
+  }, [interactive, pageSizeOverride?.w, pageSizeOverride?.h]);
 
   useEffect(() => {
     if (interactive) setPageSize(canvasSize);
@@ -761,8 +775,10 @@ export default function EditorCanvas({
           // ganzzahlige px (Parität/Anti-Hairline)
           const slotLeft = Math.round(s.x * pageSize.w);
           const slotTop = Math.round(s.y * pageSize.h);
-          const slotW = Math.round(s.w * pageSize.w);
-          const slotH = Math.round(s.h * pageSize.h);
+          const slotRight = Math.round((s.x + s.w) * pageSize.w);
+          const slotBottom = Math.round((s.y + s.h) * pageSize.h);
+          const slotW = slotRight - slotLeft;
+          const slotH = slotBottom - slotTop;
 
           const innerPad = isCoverItem ? 0 : Math.floor(gapPx / 2);
           const contentW = Math.max(0, slotW - gapPx);

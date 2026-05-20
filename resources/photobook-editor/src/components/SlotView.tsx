@@ -141,7 +141,7 @@ export default function SlotView({
         width: `${slotW}px`,
         height: `${slotH}px`,
         overflow: 'hidden',
-        borderRadius: '2px',
+        borderRadius: interactive ? '2px' : '0',
         willChange: 'transform',
         backfaceVisibility: 'hidden',
       }}

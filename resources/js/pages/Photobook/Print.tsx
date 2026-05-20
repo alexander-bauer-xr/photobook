@@ -6,6 +6,8 @@ type PrintSettings = {
     bleed_mm?: number;
     crop_marks?: boolean;
     spine_margin_mm?: number;
+    width_mm?: number;
+    height_mm?: number;
 };
 
 type PrintProps = {
