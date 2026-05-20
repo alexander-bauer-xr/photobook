@@ -306,7 +306,9 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
         } : null,
         src: resolvedWebSrc || null,
       };
-    } else {
+    } else if (data !== undefined) {
+      // Only reset cover state when the query has actually returned data with no cover.
+      // Don't clear when data is undefined (query still loading / pagesKey transition).
       setCoverTitle(fallbackTitle || '');
       setCoverPath(null);
       setCoverWebSrc(null);

@@ -282,8 +282,10 @@ class PhotobookController extends Controller
     private function injectWebSrc(array &$data, string $hash, Request $request): void
     {
         $origin = $request->getSchemeAndHttpHost();
-        foreach (($data['pages'] ?? []) as &$p) {
-            foreach (($p['items'] ?? []) as &$it) {
+        if (!is_array($data['pages'] ?? null)) return;
+        foreach ($data['pages'] as &$p) {
+            if (!is_array($p['items'] ?? null)) continue;
+            foreach ($p['items'] as &$it) {
                 if (!empty($it['rel'])) {
                     $it['webSrc'] = $origin . route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']], false);
                     continue;
@@ -316,10 +318,20 @@ class PhotobookController extends Controller
         $props = ['hash' => $hash];
 
         if ($request->boolean('print')) {
+            $paper = Config::get('photobook.paper', 'a4');
+            $orientation = Config::get('photobook.orientation', 'landscape');
+            [$baseW, $baseH] = match (strtolower($paper)) {
+                'a3'    => [297.0, 420.0],
+                default => [210.0, 297.0],
+            };
+            if ($orientation === 'landscape') [$baseW, $baseH] = [$baseH, $baseW];
+
             $props['printSettings'] = [
                 'bleed_mm'       => (float)  $request->input('bleed', 0),
                 'crop_marks'     => $request->input('crop_marks', '0') === '1',
                 'spine_margin_mm'=> (float)  $request->input('spine', 0),
+                'width_mm'       => $baseW,
+                'height_mm'      => $baseH,
             ];
         }
 

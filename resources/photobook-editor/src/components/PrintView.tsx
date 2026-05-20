@@ -9,6 +9,8 @@ interface PrintSettings {
   bleed_mm?: number;
   crop_marks?: boolean;
   spine_margin_mm?: number;
+  width_mm?: number;
+  height_mm?: number;
 }
 
 /**
@@ -31,6 +33,20 @@ function PrintRoot({ hash, printSettings }: { hash: string; printSettings?: Prin
 
   const bleedMm = printSettings?.bleed_mm ?? 0;
   const cropMarks = printSettings?.crop_marks ?? false;
+  const trimWMm = printSettings?.width_mm ?? 0;
+  const trimHMm = printSettings?.height_mm ?? 0;
+
+  // When bleed is active, slot coordinates (0–1) must map to the TRIM BOX, not the
+  // bleed-extended viewport. We place EditorCanvas in a trim-box-sized container and
+  // apply a CSS scale transform so it expands to fill the full bleed viewport. Edge
+  // photos then naturally extend into the bleed zone.
+  const PX_PER_MM = 96 / 25.4;
+  const hasBleed = bleedMm > 0 && trimWMm > 0 && trimHMm > 0;
+  const scaleX = hasBleed ? (trimWMm + 2 * bleedMm) / trimWMm : 1;
+  const scaleY = hasBleed ? (trimHMm + 2 * bleedMm) / trimHMm : 1;
+  const trimWPx = Math.round(trimWMm * PX_PER_MM);
+  const trimHPx = Math.round(trimHMm * PX_PER_MM);
+  const pageSizeOverride = hasBleed ? { w: trimWPx, h: trimHPx } : undefined;
 
   const { data, isSuccess } = useQuery({
     queryKey: ['print-pages', hash],
@@ -138,12 +154,39 @@ function PrintRoot({ hash, printSettings }: { hash: string; printSettings?: Prin
             // adding CSS padding here would shrink content — do NOT add padding.
           }}
         >
-          <EditorCanvas
-            page={page as any}
-            showHud={false}
-            interactive={false}
-            coverMeta={coverMeta}
-          />
+          {hasBleed ? (
+            // Trim-box container scaled up to fill the bleed viewport.
+            // transformOrigin: 50% 50% ensures the center stays centred while both
+            // edges extend outward by exactly bleedMm into the bleed zone.
+            <div
+              style={{
+                position: 'absolute',
+                left: `${bleedMm}mm`,
+                top: `${bleedMm}mm`,
+                width: `${trimWMm}mm`,
+                height: `${trimHMm}mm`,
+                transformOrigin: '50% 50%',
+                transform: `scale(${scaleX}, ${scaleY})`,
+              }}
+            >
+              <EditorCanvas
+                page={page as any}
+                showHud={false}
+                interactive={false}
+                gapPx={0}
+                coverMeta={coverMeta}
+                pageSizeOverride={pageSizeOverride}
+              />
+            </div>
+          ) : (
+            <EditorCanvas
+              page={page as any}
+              showHud={false}
+              interactive={false}
+              gapPx={0}
+              coverMeta={coverMeta}
+            />
+          )}
           {/* Crop marks rendered in bleed area */}
           {cropMarks && bleedMm > 0 && (
             <CropMarks bleedMm={bleedMm} />
