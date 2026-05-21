@@ -38,20 +38,18 @@ function PrintRoot({ hash, printSettings }: { hash: string; printSettings?: Prin
   const trimWMm = printSettings?.width_mm ?? 0;
   const trimHMm = printSettings?.height_mm ?? 0;
 
-  // When bleed is active, slot coordinates (0–1) map to the TRIM BOX. The
-  // EditorCanvas container is trim-sized and positioned at (bleedMm, bleedMm);
-  // a CSS scale transform (origin: center) expands it to fill the full bleed
-  // viewport so edge photos naturally extend into the bleed zone.
   const PX_PER_MM = 96 / 25.4;
   const hasPrintBox = trimWMm > 0 && trimHMm > 0;
-  const hasBleed = bleedMm > 0 && hasPrintBox;
-  const scaleX = hasBleed ? (trimWMm + 2 * bleedMm) / trimWMm : 1;
-  const scaleY = hasBleed ? (trimHMm + 2 * bleedMm) / trimHMm : 1;
-  const trimWPx = Math.round(trimWMm * PX_PER_MM);
-  const trimHPx = Math.round(trimHMm * PX_PER_MM);
-  // Pass trim dimensions to EditorCanvas so slot coords map to the trim box.
-  // When bleed is off, undefined lets EditorCanvas measure its container.
-  const pageSizeOverride = hasPrintBox ? { w: trimWPx, h: trimHPx } : undefined;
+
+  const safeMm = Math.max(
+    0,
+    Number(printSettings?.safe_zone_mm ?? printSettings?.page_frame_mm ?? 0)
+  );
+
+  const spineMm = Math.max(
+    0,
+    Number(printSettings?.spine_margin_mm ?? 0)
+  );
 
   const { data, isSuccess } = useQuery({
     queryKey: ['print-pages', hash],
@@ -88,6 +86,45 @@ function PrintRoot({ hash, printSettings }: { hash: string; printSettings?: Prin
       hasPhoto: pickBool(cover.hasPhoto) ?? !!pickString(cover.image, cover.webSrc),
     };
   }, [data]);
+
+  const getPagePrintBox = (page: any, index: number) => {
+    if (!hasPrintBox) return null;
+    const id = String(page?.id ?? '').toLowerCase();
+    const templateId = String(page?.templateId ?? page?.template ?? '').toLowerCase();
+    const printMode = String(page?.printMode ?? page?.print_mode ?? '').toLowerCase();
+
+    const isCover = id === 'cover' || templateId === 'cover';
+    const isFullBleed =
+      isCover ||
+      printMode === 'full_bleed' ||
+      printMode === 'full-bleed' ||
+      templateId.includes('full-bleed');
+
+    if (isFullBleed) {
+      return {
+        leftMm: -bleedMm,
+        topMm: -bleedMm,
+        widthMm: trimWMm + 2 * bleedMm,
+        heightMm: trimHMm + 2 * bleedMm,
+      };
+    }
+
+    const pageNo = Math.max(1, Number(page?.n ?? index + 1));
+
+    const isRightHandPage = pageNo % 2 === 1;
+
+    const marginTopMm = safeMm;
+    const marginBottomMm = safeMm;
+    const marginLeftMm = safeMm + (isRightHandPage ? spineMm : 0);
+    const marginRightMm = safeMm + (!isRightHandPage ? spineMm : 0);
+
+    return {
+      leftMm: marginLeftMm,
+      topMm: marginTopMm,
+      widthMm: Math.max(1, trimWMm - marginLeftMm - marginRightMm),
+      heightMm: Math.max(1, trimHMm - marginTopMm - marginBottomMm),
+    };
+  };
 
   // Wait for all images inside the container to finish loading
   useEffect(() => {
@@ -154,23 +191,43 @@ function PrintRoot({ hash, printSettings }: { hash: string; printSettings?: Prin
             pageBreakAfter: i < pages.length - 1 ? 'always' : 'avoid',
             breakAfter: i < pages.length - 1 ? 'page' : 'avoid',
             background: '#fff',
-            // Content fills the full enlarged PDF page (bleed area included).
-            // The PHP exporter already enlarges the page by 2×bleed_mm per side;
-            // adding CSS padding here would shrink content — do NOT add padding.
           }}
         >
           {/* Canvas: trim-sized at bleed offset, scaled out to fill the bleed area */}
           <div
-            style={{
-              position: 'absolute',
-              left: hasPrintBox ? `${bleedMm}mm` : 0,
-              top: hasPrintBox ? `${bleedMm}mm` : 0,
-              width: hasPrintBox ? `${trimWMm}mm` : '100%',
-              height: hasPrintBox ? `${trimHMm}mm` : '100%',
-              transformOrigin: 'center center',
-              transform: hasBleed ? `scale(${scaleX}, ${scaleY})` : undefined,
-              overflow: 'visible',
-            }}
+            style={(() => {
+              const box = getPagePrintBox(page, i);
+
+              const pageSizeOverride = box
+                ? {
+                  w: Math.round(box.widthMm * PX_PER_MM),
+                  h: Math.round(box.heightMm * PX_PER_MM),
+                }
+                : undefined;
+
+              return (
+                <div
+                  data-print-content
+                  style={{
+                    position: 'absolute',
+                    left: box ? `${bleedMm + box.leftMm}mm` : 0,
+                    top: box ? `${bleedMm + box.topMm}mm` : 0,
+                    width: box ? `${box.widthMm}mm` : '100%',
+                    height: box ? `${box.heightMm}mm` : '100%',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <EditorCanvas
+                    page={page as any}
+                    showHud={false}
+                    interactive={false}
+                    gapPx={0}
+                    coverMeta={coverMeta}
+                    pageSizeOverride={pageSizeOverride}
+                  />
+                </div>
+              );
+            })()}
           >
             <EditorCanvas
               page={page as any}
