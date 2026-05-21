@@ -79,6 +79,8 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [bleedMm, setBleedMm] = useState(3.0);
   const [cropMarks, setCropMarks] = useState(true);
   const [spineMarginMm, setSpineMarginMm] = useState(10.0);
+  const [pageFrameMm, setPageFrameMm] = useState(6.0);
+  const [pageGapMm, setPageGapMm] = useState(2.5);
 
   useEffect(() => {
     if (!open) return;
@@ -92,6 +94,8 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         setBleedMm(response.settings.print.bleed_mm);
         setCropMarks(response.settings.print.crop_marks);
         setSpineMarginMm(response.settings.print.spine_margin_mm);
+        setPageFrameMm(response.settings.page_frame_mm);
+        setPageGapMm(response.settings.page_gap_mm);
       })
       .catch((err) => setError(err.message || 'Failed to load settings'))
       .finally(() => setLoading(false));
@@ -102,6 +106,8 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     setError(null);
     try {
       await PB.updateSettings({
+        page_frame_mm: pageFrameMm,
+        page_gap_mm: pageGapMm,
         print: {
           enabled: printEnabled,
           bleed_mm: bleedMm,
@@ -160,11 +166,9 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     These values come from the backend configuration and help explain how the current book is rendered.
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <CardContent className="grid gap-3 sm:grid-cols-2">
                   <MetricCard label="Paper" value={`${settings?.paper ?? '—'} ${settings?.orientation ?? ''}`.trim()} />
                   <MetricCard label="DPI" value={String(settings?.dpi ?? '—')} />
-                  <MetricCard label="Page Frame" value={`${settings?.page_frame_mm ?? '—'} mm`} />
-                  <MetricCard label="Page Gap" value={`${settings?.page_gap_mm ?? '—'} mm`} />
                 </CardContent>
               </Card>
 
@@ -190,6 +194,28 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
                   <div className={!printEnabled ? 'pointer-events-none opacity-55' : ''}>
                     <div className="grid gap-4">
+                      <NumberField
+                        id="page-frame-mm"
+                        label="Page frame"
+                        suffix="mm white border"
+                        value={pageFrameMm}
+                        onChange={setPageFrameMm}
+                        disabled={!printEnabled}
+                        min={0}
+                        max={30}
+                        step={0.5}
+                      />
+                      <NumberField
+                        id="page-gap-mm"
+                        label="Photo gap"
+                        suffix="mm between photos"
+                        value={pageGapMm}
+                        onChange={setPageGapMm}
+                        disabled={!printEnabled}
+                        min={0}
+                        max={20}
+                        step={0.5}
+                      />
                       <NumberField
                         id="bleed-mm"
                         label="Bleed"

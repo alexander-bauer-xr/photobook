@@ -11,6 +11,7 @@ interface PrintSettings {
   spine_margin_mm?: number;
   safe_zone_mm?: number;
   page_frame_mm?: number;
+  page_gap_mm?: number;
   width_mm?: number;
   height_mm?: number;
 }
@@ -35,21 +36,26 @@ function PrintRoot({ hash, printSettings }: { hash: string; printSettings?: Prin
 
   const bleedMm = printSettings?.bleed_mm ?? 0;
   const cropMarks = printSettings?.crop_marks ?? false;
+  const pageFrameMm = Math.max(0, Number(printSettings?.page_frame_mm ?? 0));
+  const pageGapMm = Math.max(0, Number(printSettings?.page_gap_mm ?? 0));
+  const safeZoneMm = Math.max(0, Number(printSettings?.safe_zone_mm ?? 0));
+  const spineMarginMm = Math.max(0, Number(printSettings?.spine_margin_mm ?? 0));
   const trimWMm = printSettings?.width_mm ?? 0;
   const trimHMm = printSettings?.height_mm ?? 0;
 
+  // When bleed is active, slot coordinates (0-1) still map to the TRIM BOX.
+  // We render the trim-sized canvas offset by the bleed, then scale it out so
+  // full-bleed content reaches the enlarged media box.
   const PX_PER_MM = 96 / 25.4;
   const hasPrintBox = trimWMm > 0 && trimHMm > 0;
-
-  const safeMm = Math.max(
-    0,
-    Number(printSettings?.safe_zone_mm ?? printSettings?.page_frame_mm ?? 0)
-  );
-
-  const spineMm = Math.max(
-    0,
-    Number(printSettings?.spine_margin_mm ?? 0)
-  );
+  const hasBleed = bleedMm > 0 && hasPrintBox;
+  const scaleX = hasBleed ? (trimWMm + 2 * bleedMm) / trimWMm : 1;
+  const scaleY = hasBleed ? (trimHMm + 2 * bleedMm) / trimHMm : 1;
+  const trimWPx = Math.round(trimWMm * PX_PER_MM);
+  const trimHPx = Math.round(trimHMm * PX_PER_MM);
+  const gapPx = Math.max(0, Math.round(pageGapMm * PX_PER_MM));
+  const defaultPageSizeOverride = hasPrintBox ? { w: trimWPx, h: trimHPx } : undefined;
+  const baseFrameMm = Math.max(pageFrameMm, safeZoneMm);
 
   const { data, isSuccess } = useQuery({
     queryKey: ['print-pages', hash],
@@ -87,42 +93,44 @@ function PrintRoot({ hash, printSettings }: { hash: string; printSettings?: Prin
     };
   }, [data]);
 
-  const getPagePrintBox = (page: any, index: number) => {
+  const getPageRenderLayout = (page: any, index: number) => {
     if (!hasPrintBox) return null;
+
     const id = String(page?.id ?? '').toLowerCase();
     const templateId = String(page?.templateId ?? page?.template ?? '').toLowerCase();
     const printMode = String(page?.printMode ?? page?.print_mode ?? '').toLowerCase();
 
     const isCover = id === 'cover' || templateId === 'cover';
-    const isFullBleed =
-      isCover ||
-      printMode === 'full_bleed' ||
-      printMode === 'full-bleed' ||
-      templateId.includes('full-bleed');
+    const isExplicitFullBleed = printMode === 'full_bleed' || printMode === 'full-bleed';
+    const isTemplateFullBleed = templateId.includes('full-bleed');
+    const preserveWhiteFrame = baseFrameMm > 0 || spineMarginMm > 0;
+    const shouldScaleToBleed = isCover || isExplicitFullBleed || (isTemplateFullBleed && !preserveWhiteFrame);
 
-    if (isFullBleed) {
+    if (shouldScaleToBleed) {
       return {
-        leftMm: -bleedMm,
-        topMm: -bleedMm,
-        widthMm: trimWMm + 2 * bleedMm,
-        heightMm: trimHMm + 2 * bleedMm,
+        leftMm: bleedMm,
+        topMm: bleedMm,
+        widthMm: trimWMm,
+        heightMm: trimHMm,
+        scaleX: hasBleed ? scaleX : 1,
+        scaleY: hasBleed ? scaleY : 1,
+        overflow: 'visible' as const,
       };
     }
 
     const pageNo = Math.max(1, Number(page?.n ?? index + 1));
-
     const isRightHandPage = pageNo % 2 === 1;
-
-    const marginTopMm = safeMm;
-    const marginBottomMm = safeMm;
-    const marginLeftMm = safeMm + (isRightHandPage ? spineMm : 0);
-    const marginRightMm = safeMm + (!isRightHandPage ? spineMm : 0);
+    const leftInsetMm = baseFrameMm + (isRightHandPage ? spineMarginMm : 0);
+    const rightInsetMm = baseFrameMm + (!isRightHandPage ? spineMarginMm : 0);
 
     return {
-      leftMm: marginLeftMm,
-      topMm: marginTopMm,
-      widthMm: Math.max(1, trimWMm - marginLeftMm - marginRightMm),
-      heightMm: Math.max(1, trimHMm - marginTopMm - marginBottomMm),
+      leftMm: bleedMm + leftInsetMm,
+      topMm: bleedMm + baseFrameMm,
+      widthMm: Math.max(1, trimWMm - leftInsetMm - rightInsetMm),
+      heightMm: Math.max(1, trimHMm - 2 * baseFrameMm),
+      scaleX: 1,
+      scaleY: 1,
+      overflow: 'hidden' as const,
     };
   };
 
@@ -179,70 +187,62 @@ function PrintRoot({ hash, printSettings }: { hash: string; printSettings?: Prin
 
   return (
     <div ref={containerRef}>
-      {pages.map((page: any, i: number) => (
-        <div
-          key={`${page.id ?? 'page'}-${i}`}
-          className="print-page"
-          style={{
-            width: '100%',
-            height: '100vh',
-            position: 'relative',
-            overflow: 'hidden',
-            pageBreakAfter: i < pages.length - 1 ? 'always' : 'avoid',
-            breakAfter: i < pages.length - 1 ? 'page' : 'avoid',
-            background: '#fff',
-          }}
-        >
-          {/* Canvas: trim-sized at bleed offset, scaled out to fill the bleed area */}
+      {pages.map((page: any, i: number) => {
+        const layout = getPageRenderLayout(page, i);
+        const pageSizeOverride = layout
+          ? {
+            w: Math.round(layout.widthMm * PX_PER_MM),
+            h: Math.round(layout.heightMm * PX_PER_MM),
+          }
+          : defaultPageSizeOverride;
+
+        return (
           <div
-            style={(() => {
-              const box = getPagePrintBox(page, i);
-
-              const pageSizeOverride = box
-                ? {
-                  w: Math.round(box.widthMm * PX_PER_MM),
-                  h: Math.round(box.heightMm * PX_PER_MM),
-                }
-                : undefined;
-
-              return (
-                <div
-                  data-print-content
-                  style={{
-                    position: 'absolute',
-                    left: box ? `${bleedMm + box.leftMm}mm` : 0,
-                    top: box ? `${bleedMm + box.topMm}mm` : 0,
-                    width: box ? `${box.widthMm}mm` : '100%',
-                    height: box ? `${box.heightMm}mm` : '100%',
-                    overflow: 'hidden',
-                  }}
-                >
-                  <EditorCanvas
-                    page={page as any}
-                    showHud={false}
-                    interactive={false}
-                    gapPx={0}
-                    coverMeta={coverMeta}
-                    pageSizeOverride={pageSizeOverride}
-                  />
-                </div>
-              );
-            })()}
+            key={`${page.id ?? 'page'}-${i}`}
+            className="print-page"
+            style={{
+              width: '100%',
+              height: '100vh',
+              position: 'relative',
+              overflow: 'hidden',
+              pageBreakAfter: i < pages.length - 1 ? 'always' : 'avoid',
+              breakAfter: i < pages.length - 1 ? 'page' : 'avoid',
+              background: '#fff',
+            }}
           >
-            <EditorCanvas
-              page={page as any}
-              showHud={false}
-              interactive={false}
-              gapPx={0}
-              coverMeta={coverMeta}
-              pageSizeOverride={pageSizeOverride}
-            />
+            {/* The print layout preserves a configurable white page frame for regular pages.
+                Only explicit full-bleed pages (and the cover) are scaled into the bleed area. */}
+            <div
+              data-print-content
+              style={{
+                position: 'absolute',
+                left: layout ? `${layout.leftMm}mm` : 0,
+                top: layout ? `${layout.topMm}mm` : 0,
+                width: layout ? `${layout.widthMm}mm` : hasPrintBox ? `${trimWMm}mm` : '100%',
+                height: layout ? `${layout.heightMm}mm` : hasPrintBox ? `${trimHMm}mm` : '100%',
+                transformOrigin: 'center center',
+                transform:
+                  layout && (layout.scaleX !== 1 || layout.scaleY !== 1)
+                    ? `scale(${layout.scaleX}, ${layout.scaleY})`
+                    : undefined,
+                overflow: layout?.overflow ?? 'hidden',
+              }}
+            >
+              <EditorCanvas
+                page={page as any}
+                showHud={false}
+                interactive={false}
+                gapPx={gapPx}
+                coverMeta={coverMeta}
+                pageSizeOverride={pageSizeOverride}
+              />
+            </div>
+            {cropMarks && bleedMm > 0 && (
+              <CropMarks bleedMm={bleedMm} />
+            )}
           </div>
-          {cropMarks && bleedMm > 0 && (
-            <CropMarks bleedMm={bleedMm} />
-          )}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

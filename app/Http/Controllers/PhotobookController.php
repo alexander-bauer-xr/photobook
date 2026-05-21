@@ -318,6 +318,7 @@ class PhotobookController extends Controller
         $props = ['hash' => $hash];
 
         if ($request->boolean('print')) {
+            $overrides = $this->loadSettingsOverrides();
             $paper = Config::get('photobook.paper', 'a4');
             $orientation = Config::get('photobook.orientation', 'landscape');
             [$baseW, $baseH] = match (strtolower($paper)) {
@@ -326,12 +327,20 @@ class PhotobookController extends Controller
             };
             if ($orientation === 'landscape') [$baseW, $baseH] = [$baseH, $baseW];
 
+            $pageFrameMm = isset($overrides['page_frame_mm']) && is_numeric($overrides['page_frame_mm'])
+                ? (float) $overrides['page_frame_mm']
+                : (float) Config::get('photobook.page_frame_mm', 6);
+            $pageGapMm = isset($overrides['page_gap_mm']) && is_numeric($overrides['page_gap_mm'])
+                ? (float) $overrides['page_gap_mm']
+                : (float) Config::get('photobook.page_gap_mm', 2.5);
+
             $props['printSettings'] = [
                 'bleed_mm'       => (float)  $request->input('bleed', 0),
                 'crop_marks'     => $request->input('crop_marks', '0') === '1',
                 'spine_margin_mm' => (float)  $request->input('spine', 0),
                 'safe_zone_mm'    => (float) $request->input('safe_zone', Config::get('photobook.print.safe_zone_mm', 5)),
-                'page_frame_mm' => (float) Config::get('photobook.page_frame_mm', 6),
+                'page_frame_mm' => $pageFrameMm,
+                'page_gap_mm'   => $pageGapMm,
                 'width_mm'       => $baseW,
                 'height_mm'      => $baseH,
             ];
@@ -857,12 +866,18 @@ class PhotobookController extends Controller
         $overrides = $this->loadSettingsOverrides();
         $printConfig = Config::get('photobook.print', []);
         $printOverride = $overrides['print'] ?? [];
+        $pageFrameMm = isset($overrides['page_frame_mm']) && is_numeric($overrides['page_frame_mm'])
+            ? (float) $overrides['page_frame_mm']
+            : (float) Config::get('photobook.page_frame_mm', 6);
+        $pageGapMm = isset($overrides['page_gap_mm']) && is_numeric($overrides['page_gap_mm'])
+            ? (float) $overrides['page_gap_mm']
+            : (float) Config::get('photobook.page_gap_mm', 2.5);
         $merged = [
             'paper'         => Config::get('photobook.paper', 'a4'),
             'orientation'   => Config::get('photobook.orientation', 'landscape'),
             'dpi'           => Config::get('photobook.dpi', 150),
-            'page_frame_mm' => Config::get('photobook.page_frame_mm', 6),
-            'page_gap_mm'   => Config::get('photobook.page_gap_mm', 2.5),
+            'page_frame_mm' => $pageFrameMm,
+            'page_gap_mm'   => $pageGapMm,
             'print'         => array_merge(is_array($printConfig) ? $printConfig : [], $printOverride),
             'cover'         => Config::get('photobook.cover', []),
             'nextcloud'     => ['configured' => env('NEXTCLOUD_BASE_URI') !== null],
@@ -884,6 +899,12 @@ class PhotobookController extends Controller
             $allowed = ['enabled', 'bleed_mm', 'crop_marks', 'spine_margin_mm', 'safe_zone_mm'];
             $printPatch = array_intersect_key($incoming['print'], array_flip($allowed));
             $current['print'] = array_merge($current['print'] ?? [], $printPatch);
+        }
+
+        foreach (['page_frame_mm', 'page_gap_mm'] as $key) {
+            if (array_key_exists($key, $incoming) && is_numeric($incoming[$key])) {
+                $current[$key] = (float) $incoming[$key];
+            }
         }
 
         @file_put_contents(
@@ -1073,6 +1094,10 @@ class PhotobookController extends Controller
                 'width'  => $renderW,
                 'height' => $renderH,
             ]);
+
+            if ($printEnabled && $bleedMm > 0) {
+                $this->applyPdfPrintBoxes($outputPath, $baseW, $baseH, $bleedMm);
+            }
         } catch (\Throwable $e) {
             return response()->json(['ok' => false, 'error' => $e->getMessage()], 500);
         }
@@ -1081,6 +1106,56 @@ class PhotobookController extends Controller
             'ok'  => true,
             'url' => '/photobook/pdf/' . rawurlencode($filename),
         ]);
+    }
+
+    private function applyPdfPrintBoxes(string $path, float $trimWidthMm, float $trimHeightMm, float $bleedMm): void
+    {
+        $script = base_path('scripts/apply_pdf_boxes.py');
+        $python = $this->resolvePythonBinary();
+
+        if (!is_file($script)) {
+            throw new \RuntimeException('PDF box script not found: ' . $script);
+        }
+        $tmp = $path . '.boxed.pdf';
+
+        $cmd = [
+            $python,
+            $script,
+            $path,
+            $tmp,
+            (string) $trimWidthMm,
+            (string) $trimHeightMm,
+            (string) $bleedMm,
+        ];
+
+        $result = \Illuminate\Support\Facades\Process::timeout(60)->run($cmd);
+
+        if (!$result->successful()) {
+            @unlink($tmp);
+            $detail = trim($result->errorOutput() ?: $result->output());
+
+            if (str_contains($detail, "No module named 'pypdf'")) {
+                $detail .= ' Install script dependencies with `' . $python . ' -m pip install -r scripts/requirements.txt`.';
+            }
+
+            throw new \RuntimeException('Failed to apply PDF print boxes: ' . $detail);
+        }
+
+        if (!@rename($tmp, $path)) {
+            @unlink($tmp);
+            throw new \RuntimeException('Failed to replace exported PDF after applying print boxes.');
+        }
+    }
+
+    private function resolvePythonBinary(): string
+    {
+        foreach ([base_path('.venv/bin/python'), base_path('.venv/bin/python3')] as $candidate) {
+            if (is_file($candidate) && is_executable($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return 'python3';
     }
 
     // --------------------------------------------------------------------------
