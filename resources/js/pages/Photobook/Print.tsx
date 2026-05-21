@@ -8,6 +8,7 @@ type PrintSettings = {
     spine_margin_mm?: number;
     safe_zone_mm?: number;
     page_frame_mm?: number;
+    page_gap_mm?: number;
     width_mm?: number;
     height_mm?: number;
 };
