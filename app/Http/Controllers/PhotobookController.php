@@ -246,7 +246,7 @@ class PhotobookController extends Controller
             $entry['templateId'] = (string) $page['templateId'];
         }
         if (is_array($page['items'] ?? null)) {
-            $entry['items'] = array_map(fn ($item) => is_array($item) ? $this->normalizeOverrideItem($item) : [], $page['items']);
+            $entry['items'] = array_map(fn($item) => is_array($item) ? $this->normalizeOverrideItem($item) : [], $page['items']);
         }
         if (isset($page['layoutFeedback']) && is_array($page['layoutFeedback'])) {
             $entry['layoutFeedback'] = $page['layoutFeedback'];
@@ -264,7 +264,7 @@ class PhotobookController extends Controller
         $candidate = str_replace('\\\\', '/', $candidate);
         foreach ([$candidate] as $path) {
             $trimmed = preg_split('/[?#]/', $path, 2)[0] ?? $path;
-            $withSlash = ($trimmed !== '' && $trimmed[0] !== '/') ? '/'.$trimmed : $trimmed;
+            $withSlash = ($trimmed !== '' && $trimmed[0] !== '/') ? '/' . $trimmed : $trimmed;
             if (preg_match('#/photobook/asset/' . preg_quote($hash, '#') . '/(.+)$#', $withSlash, $m)) {
                 $rel = ltrim($m[1], '/');
                 if ($rel !== '') return route('photobook.asset', ['hash' => $hash, 'path' => $rel], false);
@@ -329,7 +329,9 @@ class PhotobookController extends Controller
             $props['printSettings'] = [
                 'bleed_mm'       => (float)  $request->input('bleed', 0),
                 'crop_marks'     => $request->input('crop_marks', '0') === '1',
-                'spine_margin_mm'=> (float)  $request->input('spine', 0),
+                'spine_margin_mm' => (float)  $request->input('spine', 0),
+                'safe_zone_mm'    => (float) $request->input('safe_zone', Config::get('photobook.print.safe_zone_mm', 5)),
+                'page_frame_mm' => (float) Config::get('photobook.page_frame_mm', 6),
                 'width_mm'       => $baseW,
                 'height_mm'      => $baseH,
             ];
@@ -361,7 +363,10 @@ class PhotobookController extends Controller
         }
         $data = $normalized;
 
-        try { $this->injectWebSrc($data, $hash, $request); } catch (\Throwable) {}
+        try {
+            $this->injectWebSrc($data, $hash, $request);
+        } catch (\Throwable) {
+        }
 
         return response()->json(['ok' => true, 'data' => $data]);
     }
@@ -450,9 +455,13 @@ class PhotobookController extends Controller
         }
 
         // Deduplicate by path
-        $seen = []; $unique = [];
+        $seen = [];
+        $unique = [];
         foreach ($photos as $ph) {
-            if (!isset($seen[$ph['path']])) { $seen[$ph['path']] = true; $unique[] = $ph; }
+            if (!isset($seen[$ph['path']])) {
+                $seen[$ph['path']] = true;
+                $unique[] = $ph;
+            }
         }
         return response()->json(['ok' => true, 'candidates' => $unique]);
     }
@@ -486,8 +495,8 @@ class PhotobookController extends Controller
             @file_put_contents($target, $content);
 
             $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
-            $mime = match($ext) {
-                'jpg','jpeg' => 'image/jpeg',
+            $mime = match ($ext) {
+                'jpg', 'jpeg' => 'image/jpeg',
                 'png'        => 'image/png',
                 'webp'       => 'image/webp',
                 'gif'        => 'image/gif',
@@ -609,7 +618,10 @@ class PhotobookController extends Controller
             @file_put_contents($path, json_encode($normalized, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
         }
         $data = $normalized;
-        try { $this->injectWebSrc($data, $hash, $request); } catch (\Throwable) {}
+        try {
+            $this->injectWebSrc($data, $hash, $request);
+        } catch (\Throwable) {
+        }
         return response()->json($data);
     }
 
@@ -793,7 +805,7 @@ class PhotobookController extends Controller
                 'height' => $item['photo']['height'] ?? null,
                 'ratio' => $item['photo']['ratio'] ?? null,
                 'takenAt' => $item['photo']['takenAt'] ?? null,
-            ], static fn ($value) => $value !== null && $value !== '');
+            ], static fn($value) => $value !== null && $value !== '');
             $item['src'] = '/photobook/asset/' . rawurlencode($hash) . '/' . $encodedRel;
             $item['fit'] = $fit;
             $item['crop'] = $fit;
@@ -1031,6 +1043,7 @@ class PhotobookController extends Controller
         $bleedMm       = (float) ($print['bleed_mm'] ?? 3.0);
         $cropMarks     = !empty($print['crop_marks']);
         $spineMarginMm = (float) ($print['spine_margin_mm'] ?? 10.0);
+        $safeZoneMm     = (float) ($print['safe_zone_mm'] ?? 5.0);
 
         // Pass print settings to the preview page via query params
         $query = [];
@@ -1038,6 +1051,7 @@ class PhotobookController extends Controller
             $query['bleed']       = $bleedMm;
             $query['crop_marks']  = $cropMarks ? '1' : '0';
             $query['spine']       = $spineMarginMm;
+            $query['safe_zone']   = $safeZoneMm;
         }
 
         $previewUrl = PlaywrightPdfRenderer::previewUrl($hash, $query);
