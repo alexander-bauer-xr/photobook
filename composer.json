@@ -1,9 +1,19 @@
 {
     "$schema": "https://getcomposer.org/schema.json",
-    "name": "laravel/laravel",
+    "name": "alexander-bauer-xr/photobook",
     "type": "project",
-    "description": "The skeleton application for the Laravel framework.",
-    "keywords": ["laravel", "framework"],
+    "description": "Self-hosted photobook generator and editor for private photo libraries.",
+    "keywords": [
+        "photobook",
+        "photo-book",
+        "nextcloud",
+        "webdav",
+        "self-hosted",
+        "laravel",
+        "react",
+        "pdf",
+        "playwright"
+    ],
     "license": "MIT",
     "require": {
         "php": "^8.3",
@@ -37,10 +47,15 @@
         "setup": [
             "composer install",
             "@php -r \"file_exists('.env') || copy('.env.example', '.env');\"",
+            "@php -r \"file_exists('database/database.sqlite') || touch('database/database.sqlite');\"",
             "@php artisan key:generate",
             "@php artisan migrate --force",
             "npm install --ignore-scripts",
             "npm run build"
+        ],
+        "setup:pdf": [
+            "npx playwright install chromium",
+            "python3 -m pip install -r scripts/requirements.txt"
         ],
         "dev": [
             "Composer\\Config::disableProcessTimeout",
@@ -49,6 +64,9 @@
         "test": [
             "@php artisan config:clear --ansi @no_additional_args",
             "@php artisan test"
+        ],
+        "lint": [
+            "./vendor/bin/pint"
         ],
         "post-autoload-dump": [
             "Illuminate\\Foundation\\ComposerScripts::postAutoloadDump",
