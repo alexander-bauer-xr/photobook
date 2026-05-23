@@ -17,16 +17,6 @@ class PhotobookController extends Controller
     // Internal helpers
     // --------------------------------------------------------------------------
 
-    private function cacheRoot(string $folder): string
-    {
-        return storage_path('app/pdf-exports/_cache/' . sha1($folder));
-    }
-
-    private function pagesPath(string $folder): string
-    {
-        return $this->cacheRoot($folder) . DIRECTORY_SEPARATOR . 'pages.json';
-    }
-
     private function pagesPathForHash(string $hash): string
     {
         return storage_path('app/pdf-exports/_cache/' . $hash) . DIRECTORY_SEPARATOR . 'pages.json';
@@ -350,37 +340,6 @@ class PhotobookController extends Controller
     }
 
     // --------------------------------------------------------------------------
-    // GET /photobook/pages?folder=...
-    // --------------------------------------------------------------------------
-
-    public function pagesJson(Request $request)
-    {
-        $folder = $request->string('folder', Config::get('photobook.folder'))->toString();
-        $hash   = sha1($folder);
-        $path   = $this->pagesPath($folder);
-
-        if (!is_file($path)) {
-            return response()->json(['ok' => false, 'error' => 'pages.json not found'], 404);
-        }
-        $data = json_decode(file_get_contents($path) ?: '', true);
-        if (!is_array($data)) {
-            return response()->json(['ok' => false, 'error' => 'invalid json'], 422);
-        }
-        $normalized = $this->normalizePagesDocument($data, $hash);
-        if ($normalized !== $data) {
-            @file_put_contents($path, json_encode($normalized, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
-        }
-        $data = $normalized;
-
-        try {
-            $this->injectWebSrc($data, $hash, $request);
-        } catch (\Throwable) {
-        }
-
-        return response()->json(['ok' => true, 'data' => $data]);
-    }
-
-    // --------------------------------------------------------------------------
     // GET /photobook/albums
     // --------------------------------------------------------------------------
 
@@ -416,12 +375,11 @@ class PhotobookController extends Controller
     }
 
     // --------------------------------------------------------------------------
-    // GET /photobook/candidates?folder=&page=&all=
+    // GET /api/photobook/candidates/{hash}
     // --------------------------------------------------------------------------
 
-    public function candidates(Request $request)
+    public function candidatesForHash(Request $request, string $hash)
     {
-        $folder = $request->string('folder', Config::get('photobook.folder'))->toString();
         $pageNo = (int) $request->query('page', 0);
         $all    = $request->boolean('all', false);
 
@@ -429,32 +387,54 @@ class PhotobookController extends Controller
             return response()->json(['ok' => false, 'error' => 'invalid page'], 422);
         }
 
-        $hash  = sha1($folder);
-        $path  = $this->pagesPath($folder);
+        $path = $this->pagesPathForHash($hash);
+
         if (!is_file($path)) {
             return response()->json(['ok' => false, 'error' => 'pages.json not found'], 404);
         }
-        $data  = json_decode(file_get_contents($path) ?: '', true);
-        $pages = is_array($data['pages'] ?? null) ? $data['pages'] : [];
+
+        $data = json_decode(file_get_contents($path) ?: '', true);
+
+        if (!is_array($data)) {
+            return response()->json(['ok' => false, 'error' => 'invalid json'], 422);
+        }
+
+        $data   = $this->normalizePagesDocument($data, $hash);
+        $pages  = is_array($data['pages'] ?? null) ? $data['pages'] : [];
         $origin = $request->getSchemeAndHttpHost();
         $photos = [];
 
         foreach ($pages as $p) {
             $n = (int) ($p['n'] ?? 0);
-            if (!$all && !($n >= $pageNo - 1 && $n <= $pageNo + 1)) continue;
+
+            if (!$all && !($n >= $pageNo - 1 && $n <= $pageNo + 1)) {
+                continue;
+            }
+
             foreach (($p['items'] ?? []) as $it) {
                 $ph = $it['photo'] ?? null;
-                if (!is_array($ph) || empty($ph['path'])) continue;
-                $web = null;
-                if (!empty($it['rel'])) {
-                    $web = $origin . route('photobook.asset', ['hash' => $hash, 'path' => $it['rel']], false);
-                } elseif (!empty($it['web'])) {
-                    $n2 = $this->normalizeAssetUrl($hash, $it['web']);
-                    $web = $n2 ? $origin . $n2 : (string) $it['web'];
-                } else {
-                    $n2 = $this->normalizeAssetUrl($hash, $it['src'] ?? null);
-                    if ($n2) $web = $origin . $n2;
+
+                if (!is_array($ph) || empty($ph['path'])) {
+                    continue;
                 }
+
+                $web = null;
+
+                if (!empty($it['rel'])) {
+                    $web = $origin . route('photobook.asset', [
+                        'hash' => $hash,
+                        'path' => $it['rel'],
+                    ], false);
+                } elseif (!empty($it['web'])) {
+                    $normalized = $this->normalizeAssetUrl($hash, $it['web']);
+                    $web = $normalized ? $origin . $normalized : (string) $it['web'];
+                } else {
+                    $normalized = $this->normalizeAssetUrl($hash, $it['src'] ?? null);
+                    if ($normalized) {
+                        $web = $origin . $normalized;
+                    }
+                }
+
                 $photos[] = [
                     'path'     => (string) $ph['path'],
                     'filename' => (string) ($ph['filename'] ?? basename((string) $ph['path'])),
@@ -463,16 +443,20 @@ class PhotobookController extends Controller
             }
         }
 
-        // Deduplicate by path
-        $seen = [];
+        $seen   = [];
         $unique = [];
-        foreach ($photos as $ph) {
-            if (!isset($seen[$ph['path']])) {
-                $seen[$ph['path']] = true;
-                $unique[] = $ph;
+
+        foreach ($photos as $photo) {
+            if (!isset($seen[$photo['path']])) {
+                $seen[$photo['path']] = true;
+                $unique[] = $photo;
             }
         }
-        return response()->json(['ok' => true, 'candidates' => $unique]);
+
+        return response()->json([
+            'ok'         => true,
+            'candidates' => $unique,
+        ]);
     }
 
     // --------------------------------------------------------------------------
@@ -519,97 +503,6 @@ class PhotobookController extends Controller
             logger()->warning('PB: asset proxy failed', ['path' => $path, 'error' => $e->getMessage()]);
             abort(404);
         }
-    }
-
-    // --------------------------------------------------------------------------
-    // POST /photobook/override
-    // --------------------------------------------------------------------------
-
-    public function overrideTemplate(Request $request)
-    {
-        $folder     = (string) $request->input('folder', Config::get('photobook.folder'));
-        $page       = (int)    $request->input('page', 0);
-        $templateId = (string) $request->input('templateId', '');
-
-        if ($page < 1 || $templateId === '') {
-            return response()->json(['ok' => false, 'error' => 'Invalid page/templateId'], 422);
-        }
-
-        $cacheRoot = $this->cacheRoot($folder);
-        if (!is_dir($cacheRoot)) @mkdir($cacheRoot, 0775, true);
-
-        // Write to overrides.json
-        $jsonPath = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.json';
-        $data = is_file($jsonPath) ? (json_decode(@file_get_contents($jsonPath), true) ?: ['pages' => []]) : ['pages' => []];
-        $data['pages'][(string) $page] = array_merge($data['pages'][(string) $page] ?? [], [
-            'templateId' => $templateId,
-            'updated_at' => date(DATE_ATOM),
-        ]);
-        @file_put_contents($jsonPath, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-
-        return response()->json(['ok' => true]);
-    }
-
-    // --------------------------------------------------------------------------
-    // POST /photobook/save-page
-    // --------------------------------------------------------------------------
-
-    public function savePage(Request $request)
-    {
-        $folder     = (string) $request->input('folder', Config::get('photobook.folder'));
-        $page       = (int)    $request->input('page');
-        $items      = $request->input('items');
-        $templateId = $request->input('templateId');
-
-        if ($page < 1) {
-            return response()->json(['ok' => false, 'error' => 'Invalid page'], 422);
-        }
-
-        $cacheRoot = $this->cacheRoot($folder);
-        if (!is_dir($cacheRoot)) @mkdir($cacheRoot, 0775, true);
-
-        $jsonPath = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.json';
-        $data = is_file($jsonPath) ? (json_decode(@file_get_contents($jsonPath), true) ?: ['pages' => []]) : ['pages' => []];
-        $entry = $data['pages'][(string) $page] ?? [];
-
-        if (is_array($items)) {
-            $norm = [];
-            foreach ($items as $it) {
-                if (!is_array($it)) continue;
-                $out = ['slotIndex' => (int) ($it['slotIndex'] ?? 0)];
-                foreach (['crop', 'objectPosition', 'src'] as $k) {
-                    if (array_key_exists($k, $it)) $out[$k] = $it[$k];
-                }
-                foreach (['scale', 'rotate', 'zoom', 'rotation'] as $k) {
-                    if (isset($it[$k])) $out[$k] = (float) $it[$k];
-                }
-                foreach (['fit', 'align', 'offset', 'auto'] as $k) {
-                    if (array_key_exists($k, $it)) $out[$k] = $it[$k];
-                }
-                if (array_key_exists('caption', $it)) {
-                    $out['caption'] = is_string($it['caption']) || is_numeric($it['caption']) ? (string) $it['caption'] : null;
-                }
-                if (!empty($it['photo']) && is_array($it['photo'])) {
-                    $ph = $it['photo'];
-                    $out['photo'] = [
-                        'path'     => (string) ($ph['path'] ?? ''),
-                        'filename' => (string) ($ph['filename'] ?? ''),
-                        'width'    => $ph['width']   ?? null,
-                        'height'   => $ph['height']  ?? null,
-                        'ratio'    => $ph['ratio']   ?? null,
-                        'takenAt'  => $ph['takenAt'] ?? null,
-                    ];
-                }
-                $norm[] = $out;
-            }
-            if (!empty($norm)) $entry['items'] = $norm;
-        }
-        if (is_string($templateId) && $templateId !== '') $entry['templateId'] = $templateId;
-
-        $data['pages'][(string) $page] = $entry;
-        @file_put_contents($jsonPath, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-
-        return response()->json(['ok' => true]);
     }
 
     // --------------------------------------------------------------------------
