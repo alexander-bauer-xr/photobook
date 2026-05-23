@@ -61,6 +61,12 @@ type Page = {
   templateId?: string;
   slots?: { x: number; y: number; w: number; h: number; ar?: number | null }[];
   items: Item[];
+  layoutFeedback?: {
+    preferred?: boolean;
+    templateId?: string | null;
+    reason?: string | null;
+    updated_at?: string;
+  } | null;
 };
 
 type PBState = {
@@ -82,6 +88,7 @@ type PBState = {
   ) => void;
 
   commitUserCrop: (pageId: string, idx: number, spec: UserCropSpec) => void;
+  updatePageFeedback: (pageId: string, feedback: Page['layoutFeedback']) => void;
 
   addPageLocal: (page: Page) => void;
   deletePageLocal: (pageId: string) => void;
@@ -393,6 +400,18 @@ export const usePB = create<PBState>((set, get) => ({
       past: [...past, pages],
       future: [],
     });
+  },
+
+  updatePageFeedback: (pageId, feedback) => {
+    const { pages } = get();
+
+    const next = pages.map((page) => {
+      if (page.id !== pageId) return page;
+      return { ...page, layoutFeedback: feedback ?? null };
+    });
+
+    // Feedback changes are not tracked in undo history
+    set({ pages: next });
   },
 }));
 
