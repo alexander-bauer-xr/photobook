@@ -6,6 +6,8 @@ import Sidebar from './components/Sidebar';
 import ReplaceDrawer from './components/ReplaceDrawer';
 import PdfReadyModal from './components/PdfReadyModal';
 import SettingsPanel from './components/SettingsPanel';
+import BuildOverlay from './features/photobook/components/BuildOverlay';
+import ExportOverlay from './features/photobook/components/ExportOverlay';
 import { useTemplates } from './hooks/useTemplates';
 import { useAlbumSelection } from './features/photobook/hooks/useAlbumSelection';
 import { useBuildPhotobook } from './features/photobook/hooks/useBuildPhotobook';
@@ -210,47 +212,13 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
   return (
     <div className="flex h-screen overflow-hidden bg-[radial-gradient(circle_at_top_left,_rgba(191,219,254,0.35),_transparent_28%),linear-gradient(180deg,_#fafaf9_0%,_#f8fafc_100%)]">
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        {/* ── Build Overlay ───────────────────────────────────────────── */}
-        {isBuilding && (
-          <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center">
-            <div className="bg-white rounded-2xl shadow-2xl p-10 flex flex-col items-center gap-6 w-[480px] max-w-[90vw]">
-              <div className="text-2xl font-semibold text-neutral-800">Building Photobook…</div>
-              <div className="w-full">
-                <div className="flex justify-between text-xs text-neutral-500 mb-1">
-                  <span>{buildMessage || 'Please wait'}</span>
-                  <span>{Math.round(buildProgress)}%</span>
-                </div>
-                <div className="w-full h-3 bg-neutral-200 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-green-500 rounded-full transition-all duration-500"
-                    style={{ width: `${Math.max(2, Math.min(100, buildProgress))}%` }}
-                  />
-                </div>
-              </div>
-              <p className="text-sm text-neutral-500 text-center">
-                Photos are being downloaded, analysed and arranged into pages.<br />
-                This may take a few minutes.
-              </p>
-            </div>
-          </div>
-        )}
+        <BuildOverlay
+          isBuilding={isBuilding}
+          buildProgress={buildProgress}
+          buildMessage={buildMessage}
+        />
 
-        {/* ── Export Overlay ──────────────────────────────────────────── */}
-        {isExporting && (
-          <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center">
-            <div className="bg-white rounded-2xl shadow-2xl p-10 flex flex-col items-center gap-6 w-[480px] max-w-[90vw]">
-              <div className="text-2xl font-semibold text-neutral-800">Exporting PDF…</div>
-              <div className="flex items-center gap-3">
-                <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-700" />
-                <span className="text-sm text-neutral-500">Rendering pages with Playwright</span>
-              </div>
-              <p className="text-sm text-neutral-500 text-center">
-                All pages are being rendered to a print-ready PDF.<br />
-                This may take up to a minute.
-              </p>
-            </div>
-          </div>
-        )}
+        <ExportOverlay isExporting={isExporting} />
 
         {/* ── Top bar ─────────────────────────────────────────────────── */}
         <header className="flex-none border-b border-neutral-200/70 bg-white/80 px-4 py-4 backdrop-blur-sm">
