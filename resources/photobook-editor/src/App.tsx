@@ -13,13 +13,8 @@ import { useCoverEditor } from './features/photobook/hooks/useCoverEditor';
 import { useDisplayPages } from './features/photobook/hooks/useDisplayPages';
 import { usePagePersistence } from './features/photobook/hooks/usePagePersistence';
 import { usePdfExport } from './features/photobook/hooks/usePdfExport';
+import { useReplacePhoto } from './features/photobook/hooks/useReplacePhoto';
 import { useSaveStatus } from './features/photobook/hooks/useSaveStatus';
-import {
-  filePathToAssetUrl,
-  normalizeAssetRel,
-  relAssetUrl,
-  webAssetRelFromUrl,
-} from './features/photobook/model/assetUrls';
 import { PB } from './lib/api';
 import { Badge } from './components/ui/badge';
 import { Button } from './components/ui/button';
@@ -51,11 +46,6 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
     pagesKey,
   } = useAlbumSelection(initialAlbumKey);
   const [pageIdx, setPageIdx] = useState(0);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerIdx, setDrawerIdx] = useState(null as number | null);
-  const [candidates, setCandidates] = useState([] as { path: string; filename: string; src?: string | null }[]);
-  const [candLoading, setCandLoading] = useState(false);
-  const [showingAllCandidates, setShowingAllCandidates] = useState(false);
   const [pageVersion, setPageVersion] = useState(0);
   const { latestPdfUrl, setLatestPdfUrl, isExporting, exportError, handleExportPdf } = usePdfExport(albumHash);
   const { saveStatus, setSaveStatus, persistWithStatus } = useSaveStatus();
@@ -145,6 +135,29 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
     if (!coverPayload) throw new Error('Choose a cover photo before saving.');
     await persistWithStatus(() => PB.setCover(albumHash, coverPayload));
   };
+  const {
+    drawerOpen,
+    setDrawerOpen,
+    candidates,
+    candLoading,
+    showingAllCandidates,
+    openReplace,
+    loadAllCandidates,
+    applyReplacement,
+  } = useReplacePhoto({
+    albumHash,
+    pageIdx,
+    page,
+    pageId,
+    coverItemRef,
+    setCoverPath,
+    setCoverWebSrc,
+    setCoverPhotoPath,
+    setPageVersion,
+    persistCover,
+    persistPage,
+    updateStoreItemWith,
+  });
   const { isBuilding, buildProgress, buildMessage, handleBuild } = useBuildPhotobook({
     folder,
     albumHash,
@@ -192,127 +205,6 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
       return;
     }
     await persistPage(page);
-  };
-
-  // open replace drawer
-  const openReplace = async (i: number) => {
-    if (!albumHash) return;
-
-    setDrawerIdx(i);
-    setDrawerOpen(true);
-    setShowingAllCandidates(false);
-    setCandLoading(true);
-    try {
-      const effectivePage = pageIdx === 0 ? 1 : (page?.n || 1);
-      const r = await PB.getCandidates(albumHash, effectivePage);
-      setCandidates(r.candidates || []);
-    } finally {
-      setCandLoading(false);
-    }
-  };
-
-  // load all candidates from folder
-  const loadAllCandidates = async () => {
-    if (!albumHash) return;
-
-    setCandLoading(true);
-    try {
-      const effectivePage = pageIdx === 0 ? 1 : (page?.n || 1);
-      const r = await PB.getCandidates(albumHash, effectivePage, true);
-      setCandidates(r.candidates || []);
-      setShowingAllCandidates(true);
-    } finally {
-      setCandLoading(false);
-    }
-  };
-
-  const applyReplacement = (
-    cand: { path: string; filename: string; src?: string | null },
-    opts?: { preserveCrop?: boolean }
-  ) => {
-    if (drawerIdx === null) return;
-
-    // Cover: only update the synthetic cover state
-    if (pageIdx === 0) {
-      const rel = webAssetRelFromUrl(cand.src || null) || normalizeAssetRel(cand.path);
-      const web = cand.src || relAssetUrl(albumHash, rel) || filePathToAssetUrl(cand.path) || null;
-      if (rel) setCoverPath(rel);
-      setCoverWebSrc(web);
-      setCoverPhotoPath(cand.path || null);
-      const prevItem = coverItemRef.current && typeof coverItemRef.current === 'object' ? coverItemRef.current : {};
-      const preserve = opts?.preserveCrop !== false;
-      const nextPhoto = cand.path ? {
-        path: cand.path,
-        ...(cand.filename ? { filename: cand.filename } : {}),
-      } : (prevItem.photo ?? null);
-      const nextItem = {
-        slotIndex: 0,
-        fit: preserve && prevItem.fit === 'contain' ? 'contain' : 'cover',
-        align: preserve ? (prevItem.align ?? { x: 0, y: 0 }) : { x: 0, y: 0 },
-        offset: preserve ? (prevItem.offset ?? { x: 0, y: 0 }) : { x: 0, y: 0 },
-        zoom: preserve && Number.isFinite(Number(prevItem.zoom)) && Number(prevItem.zoom) > 0 ? Number(prevItem.zoom) : 1,
-        rotation: preserve && Number.isFinite(Number(prevItem.rotation)) ? Number(prevItem.rotation) : 0,
-        auto: false,
-        crop: preserve && typeof prevItem.crop === 'string' ? prevItem.crop : (preserve && prevItem.fit === 'contain' ? 'contain' : 'cover'),
-        scale: preserve
-          ? (Number.isFinite(Number(prevItem.scale)) && Number(prevItem.scale) > 0 ? Number(prevItem.scale)
-            : (Number.isFinite(Number(prevItem.zoom)) && Number(prevItem.zoom) > 0 ? Number(prevItem.zoom) : 1))
-          : 1,
-        rotate: preserve
-          ? (Number.isFinite(Number(prevItem.rotate)) ? Number(prevItem.rotate)
-            : (Number.isFinite(Number(prevItem.rotation)) ? Number(prevItem.rotation) : 0))
-          : 0,
-        objectPosition: preserve && typeof prevItem.objectPosition === 'string' ? prevItem.objectPosition : '50% 50%',
-        photo: nextPhoto,
-        src: web,
-      };
-      coverItemRef.current = nextItem;
-      setDrawerOpen(false);
-      setPageVersion(v => v + 1);
-      void persistCover(rel, nextItem, cand.path || null).catch(() => { });
-      return;
-    }
-
-    if (!page || !pageId) return;
-    const it = page.items[drawerIdx];
-    const derived = cand.src || filePathToAssetUrl(cand.path) || it?.src || null;
-    const preserve = !!opts?.preserveCrop;
-
-    const currentItems = Array.isArray(page.items) ? page.items : [];
-    const prev = currentItems[drawerIdx];
-
-    if (!prev) return;
-
-    const nextItem = {
-      ...prev,
-      photo: {
-        ...(prev.photo || {}),
-        path: cand.path,
-        filename: cand.filename,
-      },
-      src: derived || undefined,
-      web: derived || undefined,
-      webSrc: derived || undefined,
-      objectPosition: preserve ? prev.objectPosition : '50% 50%',
-      scale: preserve ? (prev.scale ?? 1) : 1,
-      fit: preserve ? (prev.fit || 'cover') : 'cover',
-      align: preserve ? (prev.align || { x: 0, y: 0 }) : { x: 0, y: 0 },
-      offset: preserve ? (prev.offset || { x: 0, y: 0 }) : { x: 0, y: 0 },
-      zoom: preserve ? (Number(prev.zoom) || 1) : 1,
-      rotation: preserve ? (Number(prev.rotation) || 0) : 0,
-      auto: false,
-    };
-
-    const nextItems = currentItems.map((item: any, index: number) =>
-      index === drawerIdx ? nextItem : item,
-    );
-
-    updateStoreItemWith(pageId, drawerIdx, () => nextItem);
-
-    setDrawerOpen(false);
-    setPageVersion(v => v + 1);
-
-    void persistPage(page, nextItems).catch(() => {});
   };
 
   return (
