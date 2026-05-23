@@ -8,6 +8,7 @@ import PdfReadyModal from './components/PdfReadyModal';
 import SettingsPanel from './components/SettingsPanel';
 import { useTemplates } from './hooks/useTemplates';
 import { useAlbumSelection } from './features/photobook/hooks/useAlbumSelection';
+import { useBuildPhotobook } from './features/photobook/hooks/useBuildPhotobook';
 import { usePagePersistence } from './features/photobook/hooks/usePagePersistence';
 import { usePdfExport } from './features/photobook/hooks/usePdfExport';
 import { useSaveStatus } from './features/photobook/hooks/useSaveStatus';
@@ -61,13 +62,9 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
   const [coverSubtitle, setCoverSubtitle] = useState('');
   const [coverDateText, setCoverDateText] = useState('');
   const [coverShowDate, setCoverShowDate] = useState(false);
-  const [isBuilding, setIsBuilding] = useState(false);
-  const [buildProgress, setBuildProgress] = useState(0);
-  const [buildMessage, setBuildMessage] = useState('');
   const { latestPdfUrl, setLatestPdfUrl, isExporting, exportError, handleExportPdf } = usePdfExport(albumHash);
   const { saveStatus, setSaveStatus, persistWithStatus } = useSaveStatus();
   const coverItemRef = useRef<any>(null);
-  const progressTimer = useRef<number | null>(null);
   const suppressNextCanvasDirty = useRef(false);
   const updateStoreItem = usePB((s) => s.updateItem);
   const updateStoreItemWith = usePB((s) => s.updateItemWith);
@@ -409,6 +406,23 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
     if (!coverPayload) throw new Error('Choose a cover photo before saving.');
     await persistWithStatus(() => PB.setCover(albumHash, coverPayload));
   };
+  const { isBuilding, buildProgress, buildMessage, handleBuild } = useBuildPhotobook({
+    folder,
+    albumHash,
+    albumFolder,
+    coverTitle,
+    coverSubtitle,
+    coverDateText,
+    coverShowDate,
+    currentCoverImageRel,
+    currentCoverItem,
+    buildCoverPersistencePayload,
+    setFolder,
+    refreshAlbums,
+    refetchPages: () => {
+      void q.refetch();
+    },
+  });
 
   const swapItems = (from: number, to: number) => {
     if (!page || !pageId || pageIdx === 0) return;
@@ -560,93 +574,6 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
     setPageVersion(v => v + 1);
 
     void persistPage(page, nextItems).catch(() => {});
-  };
-
-  const handleBuild = async () => {
-    const buildFolder = albumFolder || folder;
-    if (!buildFolder) return;
-    const hasAlbumHash = !!(albumHash && /^[a-f0-9]{40}$/i.test(albumHash));
-    const coverImageRelForApi = currentCoverImageRel();
-    const coverPayloadForApi = buildCoverPersistencePayload(coverImageRelForApi, { item: currentCoverItem() });
-
-    try {
-      if (hasAlbumHash && coverPayloadForApi) {
-        try {
-          await PB.setCover(albumHash, coverPayloadForApi);
-        } catch { }
-      }
-
-      setIsBuilding(true);
-      setBuildProgress(0);
-      setBuildMessage('Starting…');
-
-      const payload: Record<string, string> = { folder: buildFolder };
-      if (coverTitle) payload.title = coverTitle;
-      if (coverImageRelForApi) payload.cover_image = coverImageRelForApi;
-
-      const trimmedSubtitle = (coverSubtitle || '').trim();
-      const trimmedDate = (coverDateText || '').trim();
-      if (trimmedSubtitle) payload.cover_subtitle = trimmedSubtitle;
-      if (trimmedDate) payload.cover_date = trimmedDate;
-      payload.cover_show_date = coverShowDate ? '1' : '0';
-
-      let buildHash = albumHash;
-      if (hasAlbumHash) {
-        await PB.build(albumHash, payload);
-      } else {
-        const response = await PB.buildByFolder(payload);
-        buildHash = response?.hash || '';
-        if (buildHash) setFolder(buildHash);
-      }
-
-      if (progressTimer.current) {
-        window.clearInterval(progressTimer.current);
-        progressTimer.current = null;
-      }
-
-      const pollHash = buildHash;
-      progressTimer.current = window.setInterval(async () => {
-        try {
-          const response: any = await PB.progress(pollHash);
-          const progress = response?.status?.progress ?? 0;
-          const message = response?.status?.step || response?.status?.state || '';
-          setBuildProgress(progress);
-          setBuildMessage(message);
-
-          if (progress >= 100 || response?.status?.state === 'finished') {
-            if (progressTimer.current) {
-              window.clearInterval(progressTimer.current);
-              progressTimer.current = null;
-            }
-            setIsBuilding(false);
-            setBuildMessage('');
-
-            const nextAlbums = await refreshAlbums().catch(() => [] as typeof albums);
-            const builtAlbum = nextAlbums.find((a: any) => a.hash === pollHash);
-            if (builtAlbum) {
-              setFolder(builtAlbum.folder || builtAlbum.hash);
-            }
-
-            q.refetch();
-          }
-        } catch {
-          if (progressTimer.current) {
-            window.clearInterval(progressTimer.current);
-            progressTimer.current = null;
-          }
-          setIsBuilding(false);
-          setBuildMessage('');
-          q.refetch();
-        }
-      }, 1000);
-    } catch {
-      if (progressTimer.current) {
-        window.clearInterval(progressTimer.current);
-        progressTimer.current = null;
-      }
-      setIsBuilding(false);
-      setBuildMessage('Build failed to start');
-    }
   };
 
   return (
