@@ -4,6 +4,7 @@ import SlotView from './SlotView';
 import { fitMath, alignOffsetToPanPx, solveAlignOffset, clamp, isFinitePos } from '../lib/layoutMath';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
+import { normalizePhotobookItem } from '../features/photobook/model/photobook.normalizers';
 
 /* =========================================================
    useUndoRedo (inline) – batching & limits
@@ -158,36 +159,7 @@ const getSrc = (it: AnyItem) => (it as any).webSrc || (it as any).web || it.src 
    Persist: Normalisieren, Validieren, Payload, POST
    ========================================================= */
 function normalizeItem(it: AnyItem): AnyItem {
-  // Helpers to convert legacy objectPosition <-> align
-  const toAlign = (op?: string): Align | undefined => {
-    if (!op) return undefined;
-    const parts = String(op).trim().split(/\s+/, 2);
-    const px = Number((parts[0] || '').replace('%',''));
-    const py = Number((parts[1] || '').replace('%',''));
-    if (!Number.isFinite(px) || !Number.isFinite(py)) return undefined;
-    const ax = clamp((px - 50) / 50, -1, 1);
-    const ay = clamp((py - 50) / 50, -1, 1);
-    return { x: ax, y: ay };
-  };
-
-  return {
-    ...it,
-    // Fit: prefer canonical, else legacy crop
-    fit: (it.fit ?? (it.crop === 'contain' ? 'contain' : 'cover')) as Fit,
-    // Align: prefer canonical, else map from objectPosition, else center
-    align: it.align ?? toAlign(it.objectPosition) ?? { x: 0, y: 0 },
-    offset: it.offset ?? { x: 0, y: 0 },
-    // Zoom: prefer canonical, else legacy scale
-    zoom: isFinitePos(it.zoom) ? (it.zoom as number)
-         : (isFinite(it.scale as any) && (it.scale as any) > 0 ? Number(it.scale) : 1),
-    // Rotation: prefer canonical, else legacy rotate
-    rotation: Number.isFinite(it.rotation) ? (it.rotation as number) % 360
-            : (Number.isFinite(it.rotate) ? (Number(it.rotate) % 360) : 0),
-    auto: it.auto === true ? true : false,
-    caption: typeof it.caption === 'string'
-      ? it.caption
-      : (typeof (it as any).caption === 'number' ? String((it as any).caption) : undefined),
-  };
+  return normalizePhotobookItem(it) as AnyItem;
 }
 
 function validateItem(it: AnyItem): string[] {
