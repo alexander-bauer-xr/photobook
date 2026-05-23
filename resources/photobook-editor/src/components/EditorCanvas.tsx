@@ -5,6 +5,7 @@ import { fitMath, alignOffsetToPanPx, solveAlignOffset, clamp, isFinitePos } fro
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { normalizePhotobookItem } from '../features/photobook/model/photobook.normalizers';
+import { buildOverridesPayload, serializeItemsForLegacySave } from '../features/photobook/model/photobook.serializers';
 
 /* =========================================================
    useUndoRedo (inline) – batching & limits
@@ -171,62 +172,6 @@ function validateItem(it: AnyItem): string[] {
   if (!Number.isFinite(it.rotation)) errs.push('rotation');
   if (it.photo && typeof it.photo.path !== 'string') errs.push('photo.path');
   return errs;
-}
-
-function buildOverridesPayload(
-  pageNumber: number,
-  templateId: string | undefined,
-  items: AnyItem[]
-) {
-  const pageKey = String(pageNumber);
-  const normalized = items.map(normalizeItem);
-
-  const itemsOut = normalized
-    .slice()
-    .sort((a, b) => a.slotIndex - b.slotIndex)
-    .map(it => {
-      const fit: Fit = it.fit === 'contain' ? 'contain' : 'cover';
-      const align = { x: clamp(Number(it.align?.x ?? 0), -1, 1), y: clamp(Number(it.align?.y ?? 0), -1, 1) };
-      const offset = { x: Number(it.offset?.x) || 0, y: Number(it.offset?.y) || 0 };
-      const zoom = isFinitePos(it.zoom) ? Number(it.zoom) : 1;
-      const rotation = Number.isFinite(Number(it.rotation)) ? ((Number(it.rotation) % 360) + 360) % 360 : 0;
-      const caption =
-        typeof it.caption === 'string'
-          ? it.caption
-          : typeof (it as any).caption === 'number'
-            ? String((it as any).caption)
-            : undefined;
-
-      const canon = {
-        slotIndex: it.slotIndex,
-        fit, align, offset, zoom, rotation,
-        auto: it.auto === true,
-        ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {}),
-        ...(caption !== undefined ? { caption } : {}),
-      };
-
-      const legacy = {
-        crop: fit,
-        objectPosition: `${Math.round(50 + align.x * 50)}% ${Math.round(50 + align.y * 50)}%`,
-        scale: zoom,
-        rotate: rotation,
-      };
-
-      const maybeSrc = (it as any).web ?? (it as any).webSrc ?? (it as any).src
-        ? { src: (it as any).web ?? (it as any).webSrc ?? (it as any).src }
-        : {};
-
-      return { ...canon, ...legacy, ...maybeSrc };
-    });
-
-  return {
-    pages: {
-      [String(pageNumber)]: {
-        ...(templateId ? { templateId } : {}), // include if set
-        items: itemsOut,
-      },
-    },
-  };
 }
 
 async function postOverrides(saveUrl: string, payload: any, init?: Omit<RequestInit, 'method' | 'body'>) {
@@ -400,7 +345,7 @@ export default function EditorCanvas({
       }
     }, 800);
     return () => clearTimeout(t);
-  }, [items, page.n, saveUrl, saveFetchInit]);
+  }, [items, page.n, page.templateId, saveUrl, saveFetchInit]);
 
   // Manueller Save
   const handleSave = useCallback(async () => {
@@ -412,20 +357,7 @@ export default function EditorCanvas({
 
     // Optional: keep legacy callback for older listeners
     if (onSave) {
-      const legacyItems = normalized.map(it => {
-        const ax = clamp(it.align?.x ?? 0, -1, 1);
-        const ay = clamp(it.align?.y ?? 0, -1, 1);
-        return {
-          slotIndex: it.slotIndex,
-          crop: (it.fit === 'contain' ? 'contain' : 'cover'),
-          objectPosition: `${Math.round(50 + ax * 50)}% ${Math.round(50 + ay * 50)}%`,
-          scale: isFinitePos(it.zoom) ? Number(it.zoom) : 1,
-          rotate: Number.isFinite(Number(it.rotation)) ? Number(it.rotation) : 0,
-          photo: it.photo ? { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } : null,
-          src: (it as any).web ?? (it as any).webSrc ?? (it as any).src ?? null,
-        };
-      });
-      onSave(legacyItems as any);
+      onSave(serializeItemsForLegacySave(normalized) as any);
     }
 
     if (saveUrl) {
@@ -440,7 +372,7 @@ export default function EditorCanvas({
     console.error(e);
     setSaveState('error');
   }
-}, [items, onSave, page.n, saveUrl, saveFetchInit]);
+}, [items, onSave, page.n, page.templateId, saveUrl, saveFetchInit]);
 
   // Keyboard Shortcuts & Nudge & Undo/Redo
   useEffect(() => {
