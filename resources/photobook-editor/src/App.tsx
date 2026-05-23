@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { usePages } from './hooks/usePages';
+import { usePhotobook } from './hooks/usePhotobook';
 import EditorCanvas from './components/EditorCanvas';
 import Sidebar from './components/Sidebar';
 import ReplaceDrawer from './components/ReplaceDrawer';
@@ -118,7 +118,7 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
   };
   const [settingsOpen, setSettingsOpen] = useState(false);
   const templatesQ = useTemplates();
-  const { pagesQ: q, pages } = usePages(pagesKey);
+  const { pagesQ: q, pages } = usePhotobook(pagesKey);
   useEffect(() => {
     setPageVersion(v => v + 1);
   }, [pagesKey]);
