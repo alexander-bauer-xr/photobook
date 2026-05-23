@@ -7,6 +7,16 @@ import ReplaceDrawer from './components/ReplaceDrawer';
 import PdfReadyModal from './components/PdfReadyModal';
 import SettingsPanel from './components/SettingsPanel';
 import { useTemplates } from './hooks/useTemplates';
+import { useAlbumSelection } from './features/photobook/hooks/useAlbumSelection';
+import { usePagePersistence } from './features/photobook/hooks/usePagePersistence';
+import { usePdfExport } from './features/photobook/hooks/usePdfExport';
+import { useSaveStatus } from './features/photobook/hooks/useSaveStatus';
+import {
+  filePathToAssetUrl,
+  normalizeAssetRel,
+  relAssetUrl,
+  webAssetRelFromUrl,
+} from './features/photobook/model/assetUrls';
 import { PB } from './lib/api';
 import { Badge } from './components/ui/badge';
 import { Button } from './components/ui/button';
@@ -23,31 +33,21 @@ const defaultCoverDateText = () => new Date().toLocaleString('en-US', { month: '
 const selectControlClassName =
   'h-10 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-900 shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-neutral-300';
 
-type AlbumRecord = { hash: string; folder: string; count: number; created_at: string };
-
-const isAlbumHash = (value?: string | null) => /^[a-f0-9]{40}$/i.test(value || '');
-
-const albumMatchesKey = (album: AlbumRecord, key: string) => {
-  if (!key) return false;
-  return album.hash === key || album.folder === key;
-};
-
-const albumPrimaryKey = (album: AlbumRecord) => album.folder || album.hash;
-
-const normalizeAssetRel = (value?: string | null): string | null => {
-  if (!value) return null;
-  const cleaned = String(value).trim().replace(/\\/g, '/').replace(/^\/+/, '');
-  return cleaned || null;
-};
-
 export default function App({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
   return <QueryClientProvider client={qc}><Root initialAlbumKey={initialAlbumKey} /></QueryClientProvider>;
 }
 
 function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
-  const [folder, setFolder] = useState(initialAlbumKey);
+  const {
+    folder,
+    setFolder,
+    albums,
+    refreshAlbums,
+    albumHash,
+    albumFolder,
+    pagesKey,
+  } = useAlbumSelection(initialAlbumKey);
   const [pageIdx, setPageIdx] = useState(0);
-  const [albums, setAlbums] = useState([] as AlbumRecord[]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerIdx, setDrawerIdx] = useState(null as number | null);
   const [candidates, setCandidates] = useState([] as { path: string; filename: string; src?: string | null }[]);
@@ -64,13 +64,10 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
   const [isBuilding, setIsBuilding] = useState(false);
   const [buildProgress, setBuildProgress] = useState(0);
   const [buildMessage, setBuildMessage] = useState('');
-  const [latestPdfUrl, setLatestPdfUrl] = useState<string | null>(null);
-  const [isExporting, setIsExporting] = useState(false);
-  const [exportError, setExportError] = useState<string | null>(null);
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'dirty' | 'saving' | 'saved' | 'error'>('idle');
+  const { latestPdfUrl, setLatestPdfUrl, isExporting, exportError, handleExportPdf } = usePdfExport(albumHash);
+  const { saveStatus, setSaveStatus, persistWithStatus } = useSaveStatus();
   const coverItemRef = useRef<any>(null);
   const progressTimer = useRef<number | null>(null);
-  const saveStatusTimer = useRef<number | null>(null);
   const suppressNextCanvasDirty = useRef(false);
   const updateStoreItem = usePB((s) => s.updateItem);
   const updateStoreItemWith = usePB((s) => s.updateItemWith);
@@ -78,6 +75,7 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
   const swapStoreItems = usePB((s) => s.swapItems);
   const updateStoreTemplate = usePB((s) => s.updateTemplate);
   const updateStorePageFeedback = usePB((s) => s.updatePageFeedback);
+  const { persistPage } = usePagePersistence({ albumHash, persistWithStatus });
 
   const buildCoverPersistencePayload = (imageRel: string | null, opts?: { item?: any; sourcePath?: string | null }) => {
     if (!imageRel) return null;
@@ -123,62 +121,10 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
   };
   const [settingsOpen, setSettingsOpen] = useState(false);
   const templatesQ = useTemplates();
-  const refreshAlbums = async () => {
-    const response = await PB.getAlbums();
-    const nextAlbums = response?.albums || [];
-    setAlbums(nextAlbums);
-    return nextAlbums;
-  };
-
-  useEffect(() => { refreshAlbums().catch(() => {}); }, []);
-  useEffect(() => () => {
-    if (saveStatusTimer.current) window.clearTimeout(saveStatusTimer.current);
-  }, []);
-  useEffect(() => {
-    if (albums.length === 0) return;
-    const matched = albums.find(a => albumMatchesKey(a, folder));
-    if (matched && isAlbumHash(folder) && matched.folder) {
-      setFolder(matched.folder);
-      return;
-    }
-    if (!folder) {
-      const first = albums[0];
-      if (first) setFolder(albumPrimaryKey(first));
-    }
-  }, [albums, folder]);
-  const currentAlbum = useMemo(() => albums.find(a => albumMatchesKey(a, folder)) || null, [albums, folder]);
-  const albumHash = currentAlbum?.hash || (isAlbumHash(folder) ? folder : '');
-  const albumFolder = currentAlbum?.folder || (!isAlbumHash(folder) ? folder : '');
-  const pagesKey = albumHash || (isAlbumHash(folder) ? folder : '');
   const { pagesQ: q, pages } = usePages(pagesKey);
   useEffect(() => {
     setPageVersion(v => v + 1);
   }, [pagesKey]);
-  // Build a web URL for cached assets from an absolute path like .../_cache/<hash>/<rel>
-  const filePathToAssetUrl = (p?: string | null): string | null => {
-    if (!p) return null;
-    const norm = String(p).replace(/^[a-z]+:\/\//i, '').replace(/\\/g, '/');
-    const m = norm.match(/\/_cache\/([^/]+)\/(.+)$/);
-    if (!m) return null;
-    const hash = m[1];
-    const rel = m[2];
-    // Encode each segment but keep slashes in place
-    const encRel = rel.split('/').map(encodeURIComponent).join('/');
-    return `/photobook/asset/${encodeURIComponent(hash)}/${encRel}`;
-  };
-  // Parse relative cache path from a /photobook/asset/{hash}/{rel} URL
-  const webAssetRelFromUrl = (u?: string | null): string | null => {
-    if (!u) return null;
-    const m = String(u).match(/\/photobook\/asset\/[^/]+\/(.+)$/);
-    return m ? decodeURIComponent(m[1]) : null;
-  };
-  // Build a web URL for relative cache asset like images/foo.jpg using album hash
-  const relAssetUrl = (hash: string, rel?: string | null): string | null => {
-    const normalizedRel = normalizeAssetRel(rel);
-    if (!hash || !normalizedRel) return null;
-    const encRel = normalizedRel.split('/').map(encodeURIComponent).join('/');
-    return `/photobook/asset/${encodeURIComponent(hash)}/${encRel}`;
-  };
   // Hydrate cover from REST if present
   useEffect(() => {
     const data: any = (q as any)?.data;
@@ -211,8 +157,6 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
     setCoverDateText(computedDateText);
     setCoverShowDate(defaultShowDate);
 
-    const currentAlbum = albums.find(a => albumMatchesKey(a, folder)) || null;
-    const albumHashLocal = currentAlbum?.hash || '';
     const fallbackTitle = pickString(cov?.title, opts.cover_title, opts.title);
 
     const coverPage = Array.isArray(data?.pages)
@@ -261,7 +205,7 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
       const resolvedWebSrc =
         cov?.webSrc
         || itemWebSrc
-        || relAssetUrl(albumHashLocal || (isAlbumHash(folder) ? folder : ''), coverImageRel);
+        || relAssetUrl(albumHash, coverImageRel);
       setCoverTitle(cov?.title || fallbackTitle || '');
       setCoverPath(coverImageRel || null);
       setCoverPhotoPath(resolvedSource || null);
@@ -329,7 +273,7 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
       setCoverPhotoPath(null);
       coverItemRef.current = null;
     }
-  }, [albums, folder, (q as any)?.data]);
+  }, [albumHash, (q as any)?.data]);
   const displayPages = useMemo(() => {
     const qPages: any[] = ((q as any)?.data?.pages || []) as any[];
     const arr: any[] = (Array.isArray(pages) && pages.length ? pages : qPages) as any[];
@@ -440,24 +384,6 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
     );
   };
 
-  const handleExportPdf = async () => {
-    if (!albumHash) return;
-    setIsExporting(true);
-    setExportError(null);
-    try {
-      const r = await PB.exportPdf(albumHash);
-      if (r.ok && r.url) {
-        setLatestPdfUrl(r.url);
-      } else {
-        setExportError(r.error || 'Export failed');
-      }
-    } catch (e) {
-      setExportError(e instanceof Error ? e.message : 'Export failed');
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
   const isLoading = q.isLoading;
   const isFetchingPages = q.isFetching;
   const isError = q.isError;
@@ -466,8 +392,6 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
   const hasPage = !!page;
   const canEditPage = hasPage && !isLoading && !isError;
   const pageLabel = pageIdx === 0 ? 'Cover' : (page ? `Page ${page.n}` : `Page ${pageIdx + 1}`)
-  const clamp01 = (v: number, lo = -1, hi = 1) => Math.max(lo, Math.min(hi, v));
-  const isPos = (v: any) => Number.isFinite(v) && v > 0;
   const isCoverPage = (target?: any) => {
     if (!target) return false;
     const id = (target.id || '').toString().toLowerCase();
@@ -478,84 +402,6 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
     if (isCoverPage(target)) return 'cover';
     const n = Math.max(1, Number(target?.n || 1));
     return target?.id || `page-${n}`;
-  };
-  const setSavedSoon = () => {
-    if (saveStatusTimer.current) window.clearTimeout(saveStatusTimer.current);
-    setSaveStatus('saved');
-    saveStatusTimer.current = window.setTimeout(() => setSaveStatus('idle'), 1400);
-  };
-  const persistWithStatus = async (task: () => Promise<any>) => {
-    if (saveStatusTimer.current) window.clearTimeout(saveStatusTimer.current);
-    setSaveStatus('saving');
-    try {
-      const result = await task();
-      setSavedSoon();
-      return result;
-    } catch (error) {
-      setSaveStatus('error');
-      throw error;
-    }
-  };
-  const normalizeItemForSave = (it: any) => {
-    const fit = it.fit === 'contain' ? 'contain' : 'cover';
-    const align = {
-      x: clamp01(Number(it.align?.x ?? 0)),
-      y: clamp01(Number(it.align?.y ?? 0)),
-    };
-    const offset = {
-      x: Number.isFinite(Number(it.offset?.x)) ? Number(it.offset?.x) : 0,
-      y: Number.isFinite(Number(it.offset?.y)) ? Number(it.offset?.y) : 0,
-    };
-    const zoom = isPos(it.zoom) ? Number(it.zoom) : (isPos(it.scale) ? Number(it.scale) : 1);
-    const rotation = Number.isFinite(Number(it.rotation))
-      ? Number(it.rotation)
-      : (Number.isFinite(Number(it.rotate)) ? Number(it.rotate) : 0);
-    const caption =
-      typeof it.caption === 'string'
-        ? it.caption
-        : typeof it.caption === 'number'
-          ? String(it.caption)
-          : undefined;
-    const objectPosition = `${Math.round(50 + align.x * 50)}% ${Math.round(50 + align.y * 50)}%`;
-
-    return {
-      slotIndex: Number.isFinite(Number(it.slotIndex)) ? Number(it.slotIndex) : 0,
-      fit,
-      align,
-      offset,
-      zoom,
-      rotation,
-      auto: !!it.auto,
-      ...(it.photo?.path ? { photo: { path: it.photo.path, ...(it.photo.filename ? { filename: it.photo.filename } : {}) } } : {}),
-      ...(it.src ? { src: it.src } : {}),
-      ...((it as any).webSrc ? { webSrc: (it as any).webSrc } : {}),
-      ...((it as any).web ? { web: (it as any).web } : {}),
-      ...(caption !== undefined ? { caption } : {}),
-      crop: fit,
-      objectPosition,
-      scale: zoom,
-      rotate: rotation,
-    };
-  };
-  const buildPageForSave = (target: any, itemsOverride?: any[]) => {
-    const cover = isCoverPage(target);
-    const n = cover ? 0 : Math.max(1, Number(target?.n || 1));
-    const items = Array.isArray(itemsOverride) ? itemsOverride : (Array.isArray(target?.items) ? target.items : []);
-
-    return {
-      ...target,
-      id: cover ? 'cover' : pageIdentity({ ...target, n }),
-      n,
-      templateId: cover ? 'cover' : (target?.templateId || target?.template || null),
-      slots: Array.isArray(target?.slots) ? target.slots : [],
-      items: items.map(normalizeItemForSave),
-      ...(target?.layoutFeedback ? { layoutFeedback: target.layoutFeedback } : {}),
-    };
-  };
-  const persistPage = async (target: any, itemsOverride?: any[]) => {
-    if (!albumHash || !target) throw new Error('Album hash is not ready yet.');
-    const payload = buildPageForSave(target, itemsOverride);
-    await persistWithStatus(() => PB.savePage(albumHash, payload));
   };
   const persistCover = async (imageRel = currentCoverImageRel(), item = currentCoverItem(), sourcePath?: string | null) => {
     if (!albumHash) throw new Error('Album hash is not ready yet.');
