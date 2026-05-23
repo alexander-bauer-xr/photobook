@@ -77,6 +77,7 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
   const replaceStorePageItems = usePB((s) => s.replacePageItems);
   const swapStoreItems = usePB((s) => s.swapItems);
   const updateStoreTemplate = usePB((s) => s.updateTemplate);
+  const updateStorePageFeedback = usePB((s) => s.updatePageFeedback);
 
   const buildCoverPersistencePayload = (imageRel: string | null, opts?: { item?: any; sourcePath?: string | null }) => {
     if (!imageRel) return null;
@@ -122,7 +123,14 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
   };
   const [settingsOpen, setSettingsOpen] = useState(false);
   const templatesQ = useTemplates();
-  useEffect(() => { PB.getAlbums().then(r => setAlbums(r?.albums || [])).catch(() => { }); }, []);
+  const refreshAlbums = async () => {
+    const response = await PB.getAlbums();
+    const nextAlbums = response?.albums || [];
+    setAlbums(nextAlbums);
+    return nextAlbums;
+  };
+
+  useEffect(() => { refreshAlbums().catch(() => {}); }, []);
   useEffect(() => () => {
     if (saveStatusTimer.current) window.clearTimeout(saveStatusTimer.current);
   }, []);
@@ -557,9 +565,25 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
   };
 
   const swapItems = (from: number, to: number) => {
-    if (!pageId) return;
+    if (!page || !pageId || pageIdx === 0) return;
+
+    const nextItems = [...(page.items || [])];
+    const [moved] = nextItems.splice(from, 1);
+
+    if (!moved) return;
+
+    nextItems.splice(to, 0, moved);
+
+    const normalizedItems = nextItems.map((item, index) => ({
+      ...item,
+      slotIndex: index,
+      auto: false,
+    }));
 
     swapStoreItems(pageId, from, to);
+    setPageVersion(v => v + 1);
+
+    void persistPage(page, normalizedItems).catch(() => {});
   };
 
   const save = async () => {
@@ -655,7 +679,12 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
     const derived = cand.src || filePathToAssetUrl(cand.path) || it?.src || null;
     const preserve = !!opts?.preserveCrop;
 
-    updateStoreItemWith(pageId, drawerIdx, (prev) => ({
+    const currentItems = Array.isArray(page.items) ? page.items : [];
+    const prev = currentItems[drawerIdx];
+
+    if (!prev) return;
+
+    const nextItem = {
       ...prev,
       photo: {
         ...(prev.photo || {}),
@@ -673,11 +702,18 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
       zoom: preserve ? (Number(prev.zoom) || 1) : 1,
       rotation: preserve ? (Number(prev.rotation) || 0) : 0,
       auto: false,
-    }));
+    };
+
+    const nextItems = currentItems.map((item: any, index: number) =>
+      index === drawerIdx ? nextItem : item,
+    );
+
+    updateStoreItemWith(pageId, drawerIdx, () => nextItem);
 
     setDrawerOpen(false);
     setPageVersion(v => v + 1);
-    void persistPage(page).catch(() => { });
+
+    void persistPage(page, nextItems).catch(() => {});
   };
 
   const handleBuild = async () => {
@@ -738,6 +774,13 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
             }
             setIsBuilding(false);
             setBuildMessage('');
+
+            const nextAlbums = await refreshAlbums().catch(() => [] as typeof albums);
+            const builtAlbum = nextAlbums.find((a: any) => a.hash === pollHash);
+            if (builtAlbum) {
+              setFolder(builtAlbum.folder || builtAlbum.hash);
+            }
+
             q.refetch();
           }
         } catch {
@@ -1031,6 +1074,11 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
                         if (pageId && pageIdx !== 0) {
                           replaceStorePageItems(pageId, items as any[]);
                         }
+                        if (suppressNextCanvasDirty.current) {
+                          suppressNextCanvasDirty.current = false;
+                        } else {
+                          setSaveStatus('dirty');
+                        }
                         if (pageIdx === 0 && Array.isArray(items) && items.length) {
                           const first = items[0] as any;
                           const existing = coverItemRef.current ?? {};
@@ -1074,13 +1122,22 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
                 }}
                 onTemplateChange={async (tpl) => {
                   if (!page || !pageId || pageIdx === 0) return;
+
+                  let nextSlots = page.slots;
+
                   try {
                     const groups = templatesQ.data || {} as any;
                     const count = Array.isArray(page.items) ? page.items.length : 0;
                     const arr = (groups[String(count)] || groups[count] || []) as any[];
                     const match = arr.find((t: any) => t.id === tpl);
                     if (match && Array.isArray(match.slots)) {
-                      const nextSlots = match.slots.map((s: any) => ({ x: s.x, y: s.y, w: s.w, h: s.h, ...(s.ar ? { ar: s.ar } : {}) }));
+                      nextSlots = match.slots.map((s: any) => ({
+                        x: s.x,
+                        y: s.y,
+                        w: s.w,
+                        h: s.h,
+                        ...(s.ar ? { ar: s.ar } : {}),
+                      }));
                       updateStoreTemplate(pageId, tpl, nextSlots);
                     } else {
                       updateStoreTemplate(pageId, tpl);
@@ -1088,8 +1145,20 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
                   } catch {
                     updateStoreTemplate(pageId, tpl);
                   }
+
+                  const nextPage = {
+                    ...page,
+                    templateId: tpl,
+                    slots: nextSlots,
+                    items: (page.items || []).map((item: any, index: number) => ({
+                      ...item,
+                      slotIndex: index,
+                      auto: false,
+                    })),
+                  };
+
                   setPageVersion(v => v + 1);
-                  await persistPage(page).catch(() => { });
+                  await persistPage(nextPage).catch(() => {});
                 }}
                 onLayoutPreferenceChange={async (preferred) => {
                   if (!page || pageIdx === 0 || !albumHash) return;
@@ -1101,7 +1170,7 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
                     reason: preferred ? 'user_preferred_layout' : null,
                     updated_at: new Date().toISOString(),
                   };
-                  page.layoutFeedback = nextFeedback;
+                  if (pageId) updateStorePageFeedback(pageId, nextFeedback);
                   setPageVersion(v => v + 1);
                   await persistWithStatus(() => PB.saveLayoutFeedback(albumHash, {
                     pageId: pageIdentity(page),

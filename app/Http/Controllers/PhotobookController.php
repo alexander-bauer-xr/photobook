@@ -340,7 +340,7 @@ class PhotobookController extends Controller
     }
 
     // --------------------------------------------------------------------------
-    // GET /photobook/albums
+    // GET /api/photobook/albums
     // --------------------------------------------------------------------------
 
     public function albums()
@@ -366,7 +366,7 @@ class PhotobookController extends Controller
     }
 
     // --------------------------------------------------------------------------
-    // GET /photobook/templates
+    // GET /api/photobook/templates
     // --------------------------------------------------------------------------
 
     public function templates()
