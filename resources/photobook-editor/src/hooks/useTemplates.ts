@@ -1,11 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
-import { api } from '../api/client';
-import type { LayoutTemplateGroups } from '../api/types';
+import { PB } from '../lib/api';
+import type { LayoutTemplateGroups } from '../lib/api';
 
 export function useTemplates() {
   return useQuery<LayoutTemplateGroups>({
     queryKey: ['layout-templates'],
-    queryFn: () => api.getTemplates(),
+    queryFn: () => PB.getTemplates(),
     staleTime: 5 * 60 * 1000,
   });
 }

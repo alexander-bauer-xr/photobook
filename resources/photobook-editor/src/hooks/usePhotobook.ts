@@ -9,20 +9,21 @@ Next run:
 */
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PB } from '../lib/api';
-import { api as clientApi } from '../api/client';
 import { useEffect } from 'react';
 import { usePB } from '../store/photobook';
 
+const isAlbumHash = (value: string) => /^[a-f0-9]{40}$/i.test(value || '');
+
 export function usePhotobook(key: string) {
   const qc = useQueryClient();
-  const setInitial = usePB(s=>s.setInitial);
-  const pages = usePB(s=>s.pages);
+  const setInitial = usePB(s => s.setInitial);
+  const pages = usePB(s => s.pages);
+  const enabled = isAlbumHash(key);
 
   const pagesQ = useQuery({
     queryKey: ['pages', key],
-    // Accept either folder or hash; detect 40-hex hash to use the new API, else legacy folder endpoint
-    queryFn: () => (/^[a-f0-9]{40}$/i.test(key) ? PB.getPages(key) : clientApi.getPages(key)) as any,
-    enabled: !!key,
+    queryFn: () => PB.getPages(key),
+    enabled,
   });
   useEffect(() => {
     const data: any = (pagesQ as any)?.data;

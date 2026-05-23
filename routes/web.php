@@ -7,13 +7,6 @@ Route::get('/', function () {
     return view('welcome');
 });
 
-// ── Photobook Web API (folder-based) — muss vor /{hash} stehen! ──────────────
-Route::get('/photobook/pages',        [PhotobookController::class, 'pagesJson']);
-Route::get('/photobook/albums',       [PhotobookController::class, 'albums']);
-Route::get('/photobook/templates',    [PhotobookController::class, 'templates']);
-Route::get('/photobook/candidates',   [PhotobookController::class, 'candidates']);
-Route::post('/photobook/override',    [PhotobookController::class, 'overrideTemplate']);
-Route::post('/photobook/save-page',   [PhotobookController::class, 'savePage']);
 Route::get('/photobook/asset/{hash}/{path}',
     [PhotobookController::class, 'asset'])
     ->where('path', '.*')

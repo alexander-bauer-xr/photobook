@@ -34,7 +34,38 @@ export interface SettingsResponse {
   settings: AppSettings;
 }
 
+export type AlbumRecord = {
+  hash: string;
+  folder: string;
+  count: number;
+  created_at: string;
+};
+
+export type CandidatePhoto = {
+  path: string;
+  filename: string;
+  src?: string | null;
+};
+
+export interface LayoutTemplateGroups {
+  [count: string]: Array<{ id: string; slots: any[] }>;
+}
+
 export const PB = {
+  getAlbums: () =>
+    api<{ ok: boolean; albums: AlbumRecord[] }>('/api/photobook/albums'),
+
+  getTemplates: () =>
+    api<LayoutTemplateGroups>('/api/photobook/templates'),
+
+  getCandidates: (hash: string, page: number, all?: boolean) => {
+    const params = new URLSearchParams({ page: String(page) });
+    if (all) params.set('all', '1');
+    return api<{ ok: boolean; candidates: CandidatePhoto[] }>(
+      `/api/photobook/candidates/${hash}?${params.toString()}`,
+    );
+  },
+
   getPages: (hash: string) => api<any>(`/api/photobook/pages/${hash}`),
   patchPages: (hash: string, patch: any) => api(`/api/photobook/pages/${hash}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   savePage: (hash: string, page: any) => api<{ ok: boolean }>(`/api/photobook/pages/${hash}`, { method: 'PATCH', body: JSON.stringify({ pages: [page] }) }),
@@ -46,7 +77,6 @@ export const PB = {
   buildByFolder: (payload: any) => api(`/api/photobook/build-folder`, { method: 'POST', body: JSON.stringify(payload) }) as Promise<{ ok: boolean; status: string; hash: string }>,
   progress: (hash: string) => api(`/api/photobook/progress/${hash}`),
   exportPdf: (hash: string) => api<{ ok: boolean; url?: string; error?: string }>(`/api/photobook/export/${hash}`, { method: 'POST' }),
-  // Settings API
   getSettings: () => api<SettingsResponse>('/api/photobook/settings'),
   updateSettings: (settings: Partial<AppSettings>) => api<{ ok: boolean; updated: Record<string, any> }>('/api/photobook/settings', { method: 'POST', body: JSON.stringify({ settings }) }),
 };
