@@ -122,13 +122,13 @@ export function useCoverEditor({
       setCoverPath(coverImageRel || null);
       setCoverPhotoPath(resolvedSource || null);
       setCoverWebSrc((prev) => {
-        // Bump canvas version when the src URL becomes available for the first time,
-        // so EditorCanvas re-reads the cover item (page identity never changes).
-        if (resolvedWebSrc && !prev) {
+        const nextWebSrc = resolvedWebSrc || null;
+
+        if (nextWebSrc !== prev) {
           suppressNextCanvasDirty.current = true;
           setPageVersion((version) => version + 1);
         }
-        return resolvedWebSrc || null;
+        return nextWebSrc;
       });
 
       const align = parseAlign(cov?.align ?? coverItem?.align, cov?.objectPosition ?? coverItem?.objectPosition);
