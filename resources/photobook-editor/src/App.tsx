@@ -21,17 +21,13 @@ import { PB } from './lib/api';
 import { Badge } from './components/ui/badge';
 import { Button } from './components/ui/button';
 import { Card, CardContent } from './components/ui/card';
-import { Checkbox } from './components/ui/checkbox';
-import { Input } from './components/ui/input';
-import { Label } from './components/ui/label';
-import { Separator } from './components/ui/separator';
 import { usePB } from './store/photobook';
+import TopToolbar from './features/photobook/components/TopToolbar';
+import CoverEditorBar from './features/photobook/components/CoverEditorBar';
 
 const qc = new QueryClient();
 
 const defaultCoverDateText = () => new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' });
-const selectControlClassName =
-  'h-10 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-900 shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-neutral-300';
 
 export default function App({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
   return <QueryClientProvider client={qc}><Root initialAlbumKey={initialAlbumKey} /></QueryClientProvider>;
@@ -197,7 +193,7 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
     swapStoreItems(pageId, from, to);
     setPageVersion(v => v + 1);
 
-    void persistPage(page, normalizedItems).catch(() => {});
+    void persistPage(page, normalizedItems).catch(() => { });
   };
 
   const save = async () => {
@@ -220,164 +216,68 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
 
         <ExportOverlay isExporting={isExporting} />
 
-        {/* ── Top bar ─────────────────────────────────────────────────── */}
-        <header className="flex-none border-b border-neutral-200/70 bg-white/80 px-4 py-4 backdrop-blur-sm">
-          <div className="flex min-w-0 flex-wrap items-center gap-3">
-            <div className="mr-3 shrink-0">
-              <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-neutral-500">Photobook Editor</div>
-              <div className="mt-1 text-lg font-semibold text-neutral-900">Layout workspace</div>
-            </div>
-            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
-              <select
-                aria-label="Albums"
-                className={`${selectControlClassName} min-w-[12rem] max-w-full flex-1 md:max-w-[240px]`}
-                value={folder}
-                onChange={e => { setFolder(e.target.value); setPageIdx(0); }}
-              >
-                <option value="">Select album…</option>
-                {albums.map(a => (
-                  <option key={a.hash} value={a.folder || a.hash}>{a.folder || a.hash} ({a.count})</option>
-                ))}
-              </select>
-              <Input
-                className="min-w-[14rem] flex-[1.2] md:max-w-[22rem]"
-                value={folder}
-                onChange={e => setFolder(e.target.value)}
-                placeholder="or type folder path…"
-              />
-              <Button
-                variant="success"
-                disabled={!folder || isBuilding}
-                onClick={handleBuild}
-                title={hasPages ? 'Rebuild from Nextcloud' : 'Generate pages from Nextcloud folder'}
-              >
-                {hasPages ? 'Rebuild' : 'Build'}
-              </Button>
-            </div>
+        <TopToolbar
+          folder={folder}
+          albums={albums}
+          isBuilding={isBuilding}
+          hasPages={hasPages}
+          isFetchingPages={isFetchingPages}
+          saveStatus={saveStatus}
+          pageIdx={pageIdx}
+          pageLabel={pageLabel}
+          pageCount={displayPages.length}
+          canEditPage={canEditPage}
+          albumHash={albumHash}
+          isExporting={isExporting}
+          exportError={exportError}
+          onSelectAlbum={(value) => {
+            setFolder(value);
+            setPageIdx(0);
+          }}
+          onFolderChange={setFolder}
+          onBuild={handleBuild}
+          onPrevPage={() => setPageIdx(p => Math.max(0, p - 1))}
+          onNextPage={() => setPageIdx(p => p + 1)}
+          onSave={async () => {
+            try {
+              await save();
+            } catch (error) {
+              alert(error instanceof Error ? error.message : 'Failed to save');
+            }
+          }}
+          onExportPdf={handleExportPdf}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
 
-            <div className="ml-auto flex flex-wrap items-center gap-3">
-              {isFetchingPages && (
-                <Badge>Loading pages…</Badge>
-              )}
-              {saveStatus === 'dirty' && <Badge variant="warning">Unsaved edits</Badge>}
-              {saveStatus === 'saving' && <Badge>Saving…</Badge>}
-              {saveStatus === 'saved' && <Badge variant="success">Saved</Badge>}
-              {saveStatus === 'error' && <Badge variant="warning">Save failed</Badge>}
-              {hasPages && (
-                <>
-                  <Separator orientation="vertical" className="mx-1 hidden h-8 md:block" />
-                  <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={pageIdx <= 0}
-                      onClick={() => setPageIdx(p => Math.max(0, p - 1))}
-                    >
-                      Prev
-                    </Button>
-                    <Badge>{pageLabel}</Badge>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={displayPages.length <= pageIdx + 1}
-                      onClick={() => setPageIdx(p => p + 1)}
-                    >
-                      Next
-                    </Button>
-                  </div>
-                  <Separator orientation="vertical" className="mx-1 hidden h-8 md:block" />
-                  <Button
-                    variant="brand"
-                    disabled={!canEditPage || (pageIdx === 0 && !albumHash)}
-                    onClick={async () => {
-                      try { await save(); }
-                      catch (error) { alert(error instanceof Error ? error.message : 'Failed to save'); }
-                    }}
-                  >
-                    {pageIdx === 0 ? 'Save cover' : 'Save page'}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    disabled={isExporting || !albumHash}
-                    onClick={handleExportPdf}
-                    title="Export to PDF via Playwright"
-                  >
-                    {isExporting ? 'Exporting…' : 'Export PDF'}
-                  </Button>
-                  {exportError && <Badge variant="warning">{exportError}</Badge>}
-                </>
-              )}
-
-              <Button variant="outline" onClick={() => setSettingsOpen(true)} title="Settings">
-                Settings
-              </Button>
-            </div>
-          </div>
-        </header>
-
-        {/* ── Cover editor bar (only on page 0 after build) ──────────── */}
         {hasPages && albumHash && pageIdx === 0 && (
-          <div className="flex-none border-b border-neutral-200/70 bg-white/70 px-4 py-4">
-            <Card className="rounded-[26px] border-neutral-200/80 bg-white/90 shadow-sm">
-              <CardContent className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.85fr)_auto]">
-                <div className="xl:col-span-full">
-                  <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-neutral-500">Cover</div>
-                </div>
-                <div className="min-w-0">
-                  <Label htmlFor="cover-title" className="mb-2 block text-xs uppercase tracking-[0.12em] text-neutral-500">
-                    Title
-                  </Label>
-                  <Input
-                    id="cover-title"
-                    value={coverTitle}
-                    onChange={e => { setCoverTitle(e.target.value); setSaveStatus('dirty'); }}
-                    placeholder="Cover title"
-                  />
-                </div>
-                <div className="min-w-0">
-                  <Label htmlFor="cover-subtitle" className="mb-2 block text-xs uppercase tracking-[0.12em] text-neutral-500">
-                    Subheadline
-                  </Label>
-                  <Input
-                    id="cover-subtitle"
-                    value={coverSubtitle}
-                    onChange={e => { setCoverSubtitle(e.target.value); setSaveStatus('dirty'); }}
-                    placeholder="Optional"
-                  />
-                </div>
-                <div className="min-w-0">
-                  <Label htmlFor="cover-date" className="mb-2 block text-xs uppercase tracking-[0.12em] text-neutral-500">
-                    Date
-                  </Label>
-                  <Input
-                    id="cover-date"
-                    value={coverDateText}
-                    onChange={e => { setCoverDateText(e.target.value); setSaveStatus('dirty'); }}
-                    placeholder="e.g. Summer 2025"
-                    disabled={!coverShowDate}
-                  />
-                </div>
-                <div className="flex flex-wrap items-center gap-3 xl:col-span-full">
-                  <label className="flex items-center gap-3 rounded-2xl border border-neutral-200 bg-neutral-50 px-4 py-3">
-                    <Checkbox
-                      checked={coverShowDate}
-                      onCheckedChange={(checked) => {
-                        const next = checked === true;
-                        setCoverShowDate(next);
-                        if (next && !(coverDateText || '').trim()) setCoverDateText(defaultCoverDateText());
-                        setSaveStatus('dirty');
-                      }}
-                    />
-                    <span className="text-sm font-medium text-neutral-700">Show date</span>
-                  </label>
-                  {coverWebSrc ? <img src={coverWebSrc} alt="cover" className="h-12 rounded-2xl border border-neutral-200" /> : null}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+          <CoverEditorBar
+            coverTitle={coverTitle}
+            coverSubtitle={coverSubtitle}
+            coverDateText={coverDateText}
+            coverShowDate={coverShowDate}
+            coverWebSrc={coverWebSrc}
+            onCoverTitleChange={(value) => {
+              setCoverTitle(value);
+              setSaveStatus('dirty');
+            }}
+            onCoverSubtitleChange={(value) => {
+              setCoverSubtitle(value);
+              setSaveStatus('dirty');
+            }}
+            onCoverDateTextChange={(value) => {
+              setCoverDateText(value);
+              setSaveStatus('dirty');
+            }}
+            onCoverShowDateChange={(checked) => {
+              setCoverShowDate(checked);
+              if (checked && !(coverDateText || '').trim()) {
+                setCoverDateText(defaultCoverDateText());
+              }
+              setSaveStatus('dirty');
+            }}
+          />
         )}
 
-        {/* ── Main content area ───────────────────────────────────────── */}
         <main className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           {/* Empty / build-required state */}
           {!hasPages && !isLoading && (
@@ -530,7 +430,7 @@ function Root({ initialAlbumKey = '' }: { initialAlbumKey?: string }) {
                   };
 
                   setPageVersion(v => v + 1);
-                  await persistPage(nextPage).catch(() => {});
+                  await persistPage(nextPage).catch(() => { });
                 }}
                 onLayoutPreferenceChange={async (preferred) => {
                   if (!page || pageIdx === 0 || !albumHash) return;
