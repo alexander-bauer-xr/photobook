@@ -41,9 +41,7 @@ RUN apt-get update \
         intl \
         mbstring \
         pcntl \
-        pdo \
         pdo_sqlite \
-        sqlite3 \
         zip \
     && rm -rf /var/lib/apt/lists/*
 
