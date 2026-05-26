@@ -17,9 +17,7 @@ class BuildPhotoBook implements ShouldQueue
     /** Allow long-running builds (in seconds) */
     public int $timeout = 1200; // 20 minutes
 
-    public function __construct(public array $options = [])
-    {
-    }
+    public function __construct(public array $options = []) {}
 
     public function handle(
         NextcloudPhotoRepository $repo,
@@ -41,9 +39,9 @@ class BuildPhotoBook implements ShouldQueue
         ]);
 
         $folder = $this->options['folder'] ?? Config::get('photobook.folder');
-        
+
         // Helper to update progress status
-        $updateProgress = function(int $progress, string $step, string $state = 'running') use ($folder) {
+        $updateProgress = function (int $progress, string $step, string $state = 'running') use ($folder) {
             try {
                 $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
                 if (!is_dir($cacheRoot)) {
@@ -57,9 +55,10 @@ class BuildPhotoBook implements ShouldQueue
                 ]));
                 // Also log to console for visibility
                 logger()->info("PB: [{$progress}%] {$step}");
-            } catch (\Throwable $e) {}
+            } catch (\Throwable $e) {
+            }
         };
-        
+
         $updateProgress(1, 'Starting build...');
         $paper = $this->options['paper'] ?? Config::get('photobook.paper');
         $orientation = $this->options['orientation'] ?? Config::get('photobook.orientation', 'landscape');
@@ -114,33 +113,33 @@ class BuildPhotoBook implements ShouldQueue
         // Run feature extraction if ML is enabled and we're missing features
         if (config('photobook.ml.enable') && \Illuminate\Support\Facades\Schema::hasTable('photo_features')) {
             $needsExtraction = false;
-            
+
             // Check if we have any ML features that require sidecar processing
-            $needsSidecar = config('photobook.ml.faces') || 
-                           config('photobook.ml.aesthetic') || 
-                           config('photobook.ml.saliency') || 
-                           config('photobook.ml.horizon');
-            
+            $needsSidecar = config('photobook.ml.faces') ||
+                config('photobook.ml.aesthetic') ||
+                config('photobook.ml.saliency') ||
+                config('photobook.ml.horizon');
+
             if ($needsSidecar && count($photos) > 0) {
                 // Sample a few photos to see if we have features
                 $samplePaths = array_slice(array_map(fn($p) => $p->path, $photos), 0, 5);
                 $existing = \App\Models\PhotoFeature::whereIn('path', $samplePaths)->count();
-                
+
                 if ($existing < count($samplePaths) * 0.5) { // Less than 50% have features
                     $needsExtraction = true;
                 }
             }
-            
+
             if ($needsExtraction) {
                 try {
                     $updateProgress(12, 'Extracting ML features (this may take a while)...');
-                    
+
                     logger()->info('PB: Running feature extraction for folder: ' . $folder);
                     \Illuminate\Support\Facades\Artisan::call('photobook:extract', [
                         'folder' => $folder,
                         '--force' => false
                     ]);
-                    
+
                     logger()->info('PB: Feature extraction completed');
                 } catch (\Throwable $e) {
                     logger()->error('PB: Feature extraction failed: ' . $e->getMessage());
@@ -170,25 +169,25 @@ class BuildPhotoBook implements ShouldQueue
             'mem_mb' => round(memory_get_usage(true) / 1048576, 1),
         ]);
         $updateProgress(30, 'Probed ' . $withDims . '/' . count($photos) . ' images');
-        usort($photos, function($a,$b) {
+        usort($photos, function ($a, $b) {
             $ta = $a->takenAt?->getTimestamp() ?? PHP_INT_MIN;
             $tb = $b->takenAt?->getTimestamp() ?? PHP_INT_MIN;
             return $ta <=> $tb ?: strcmp($a->filename, $b->filename);
         });
 
         // Optional dedupe burst by pHash within small time windows
-    if (config('photobook.ml.enable') && config('photobook.ml.phash') && \Illuminate\Support\Facades\Schema::hasTable('photo_features')) {
+        if (config('photobook.ml.enable') && config('photobook.ml.phash') && \Illuminate\Support\Facades\Schema::hasTable('photo_features')) {
             $updateProgress(35, 'Removing duplicate photos...');
             $featRepo = app(FeatureRepository::class);
-            $paths = array_map(fn($p)=>$p->path, $photos);
+            $paths = array_map(fn($p) => $p->path, $photos);
             $features = $featRepo->getMany($paths);
             $filtered = [];
             $window = 30; // seconds
-            for ($i=0; $i<count($photos); $i++) {
+            for ($i = 0; $i < count($photos); $i++) {
                 $keep = true;
                 $pi = $photos[$i];
                 $ph_i = $features[$pi->path]->phash ?? null;
-                for ($j=max(0,$i-5); $j<$i; $j++) {
+                for ($j = max(0, $i - 5); $j < $i; $j++) {
                     $pj = $photos[$j];
                     $dt = abs(($pi->takenAt?->getTimestamp() ?? 0) - ($pj->takenAt?->getTimestamp() ?? 0));
                     if ($dt > $window) continue;
@@ -198,14 +197,19 @@ class BuildPhotoBook implements ShouldQueue
                         // prefer sharper
                         $sh_i = (float)($features[$pi->path]->sharpness ?? 0);
                         $sh_j = (float)($features[$pj->path]->sharpness ?? 0);
-                        if ($sh_i <= $sh_j) { $keep = false; break; } else { unset($filtered[$j]); }
+                        if ($sh_i <= $sh_j) {
+                            $keep = false;
+                            break;
+                        } else {
+                            unset($filtered[$j]);
+                        }
                     }
                 }
                 if ($keep) $filtered[$i] = $pi;
             }
             $photosBefore = count($photos);
             $photos = array_values($filtered);
-            logger()->info('PB: dedupe by pHash', ['before'=>$photosBefore,'after'=>count($photos)]);
+            logger()->info('PB: dedupe by pHash', ['before' => $photosBefore, 'after' => count($photos)]);
         }
 
         $useV2 = (bool) ($this->options['v2'] ?? true);
@@ -215,9 +219,9 @@ class BuildPhotoBook implements ShouldQueue
             $groups = $grouper->group($photos, 4);
             $pages = [];
             $recentTpls = [];
-            // Load review overrides if present (latest entry for each page wins)
             $overridesByPage = [];
             $jsonOverridesByPage = [];
+            $jsonOverridePagesByPage = [];
             try {
                 $cacheRoot = storage_path('app/pdf-exports/_cache/' . sha1($folder));
                 $ovFile = $cacheRoot . DIRECTORY_SEPARATOR . 'overrides.log';
@@ -241,8 +245,11 @@ class BuildPhotoBook implements ShouldQueue
                     $pagesOv = (array) ($ov['pages'] ?? []);
                     foreach ($pagesOv as $k => $entry) {
                         $n = (int) $k;
+                        if ($n < 1 || !is_array($entry)) continue;
+                        $jsonOverridePagesByPage[$n] = $entry;
+
                         $tid = (string) ($entry['templateId'] ?? '');
-                        if ($n >= 1 && $tid !== '') {
+                        if ($tid !== '') {
                             $jsonOverridesByPage[$n] = $tid;
                         }
                     }
@@ -269,7 +276,9 @@ class BuildPhotoBook implements ShouldQueue
                 // Track recent template ids for variety penalty
                 if (!empty($choice['template'])) {
                     $recentTpls[] = $choice['template'];
-                    if (count($recentTpls) > 12) { $recentTpls = array_slice($recentTpls, -12); }
+                    if (count($recentTpls) > 12) {
+                        $recentTpls = array_slice($recentTpls, -12);
+                    }
                 }
             }
             logger()->info('PB: planner v2 pages', [
@@ -318,6 +327,16 @@ class BuildPhotoBook implements ShouldQueue
                     'slots'      => $page['slots'] ?? [],
                     'items'      => $items,
                 ];
+
+                $pageNo = $idx + 1;
+                if (isset($jsonOverridePagesByPage[$pageNo])) {
+                    $pageJson = $this->applyPageOverrideToJson(
+                        $pageJson,
+                        $jsonOverridePagesByPage[$pageNo],
+                        $folder,
+                        $hash
+                    );
+                }
             }
 
             $pagesDoc = [
@@ -326,6 +345,10 @@ class BuildPhotoBook implements ShouldQueue
                 'count'      => count($pagesForJson),
                 'pages'      => $pagesForJson,
             ];
+
+            if (!empty($coverMeta)) {
+                $pagesDoc['cover'] = $coverMeta;
+            }
             @file_put_contents(
                 $cacheDir . DIRECTORY_SEPARATOR . 'pages.json',
                 json_encode($pagesDoc, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
@@ -396,9 +419,9 @@ class BuildPhotoBook implements ShouldQueue
                                 $slotIdx = (int) ($oit['slotIndex'] ?? -1);
                                 if ($slotIdx >= 0) {
                                     // Map relative x/y/width/height overrides to slot rects for generic template
-                                    foreach (['x','y','width','height'] as $k) {
+                                    foreach (['x', 'y', 'width', 'height'] as $k) {
                                         if (array_key_exists($k, $oit) && isset($pages[$i]['slots'][$slotIdx])) {
-                                            $pages[$i]['slots'][$slotIdx][substr($k,0,1)] = (float) $oit[$k]; // x->x, y->y, width->w, height->h
+                                            $pages[$i]['slots'][$slotIdx][substr($k, 0, 1)] = (float) $oit[$k]; // x->x, y->y, width->w, height->h
                                             if ($k === 'width') $pages[$i]['slots'][$slotIdx]['w'] = (float) $oit[$k];
                                             if ($k === 'height') $pages[$i]['slots'][$slotIdx]['h'] = (float) $oit[$k];
                                         }
@@ -409,7 +432,7 @@ class BuildPhotoBook implements ShouldQueue
                                             $si = (int) ($pit['slotIndex'] ?? 0);
                                             if ($si === $slotIdx) {
                                                 // Apply visual overrides
-                                                foreach (['caption','objectPosition','crop','scale','rotate'] as $k) {
+                                                foreach (['caption', 'objectPosition', 'crop', 'scale', 'rotate'] as $k) {
                                                     if (array_key_exists($k, $oit)) {
                                                         $pages[$i]['items'][$j][$k] = $oit[$k];
                                                     }
@@ -476,7 +499,7 @@ class BuildPhotoBook implements ShouldQueue
             'crop_marks' => (bool) ($persistedPrint['crop_marks'] ?? $printConfig['crop_marks'] ?? true),
             'spine_margin_mm' => (float) ($persistedPrint['spine_margin_mm'] ?? $printConfig['spine_margin_mm'] ?? 10.0),
         ];
-        
+
         logger()->info('PB: print options', $printOptions);
 
         $pdf->renderTo($name, $html, $paper, $orientation, $dpi, $printOptions);
@@ -490,6 +513,98 @@ class BuildPhotoBook implements ShouldQueue
             'print_mode' => $printOptions['enabled'],
         ]);
         $updateProgress(100, 'Complete! PDF saved as ' . $name, 'finished');
+    }
+
+    private function applyPageOverrideToJson(array $page, array $override, string $folder, string $hash): array
+    {
+        if (!empty($override['templateId'])) {
+            $page['templateId'] = (string) $override['templateId'];
+        }
+        if (isset($override['layoutFeedback']) && is_array($override['layoutFeedback'])) {
+            $page['layoutFeedback'] = $override['layoutFeedback'];
+        }
+
+        if (
+            empty($override['items']) ||
+            !is_array($override['items']) ||
+            empty($page['items']) ||
+            !is_array($page['items'])
+        ) {
+            return $page;
+        }
+
+        $overridesBySlot = [];
+        foreach ($override['items'] as $item) {
+            if (!is_array($item)) continue;
+
+            $slotIndex = (int) ($item['slotIndex'] ?? -1);
+
+            if ($slotIndex >= 0) {
+                $overridesBySlot[$slotIndex] = $item;
+            }
+        }
+
+        foreach ($page['items'] as $itemIndex => $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $slotIndex = (int) ($item['slotIndex'] ?? $itemIndex);
+            $overrideItem = $overridesBySlot[$slotIndex] ?? null;
+
+            if (!is_array($overrideItem)) {
+                continue;
+            }
+
+            foreach (
+                [
+                    'src',
+                    'web',
+                    'webSrc',
+                    'fit',
+                    'crop',
+                    'align',
+                    'offset',
+                    'zoom',
+                    'scale',
+                    'rotation',
+                    'rotate',
+                    'objectPosition',
+                    'caption',
+                    'auto',
+                ] as $key
+            ) {
+                if (array_key_exists($key, $overrideItem)) {
+                    $page['items'][$itemIndex][$key] = $overrideItem[$key];
+                }
+            }
+
+            foreach (['x' => 'x', 'y' => 'y', 'width' => 'w', 'height' => 'h'] as $sourceKey => $slotKey) {
+                if (array_key_exists($sourceKey, $overrideItem) && isset($page['slots'][$slotIndex])) {
+                    $page['slots'][$slotIndex][$slotKey] = (float) $overrideItem[$sourceKey];
+                }
+            }
+
+            if (array_key_exists('photo', $overrideItem)) {
+                if (is_array($overrideItem['photo'])) {
+                    $page['items'][$itemIndex]['photo'] = $overrideItem['photo'];
+                    $photoPath = (string) ($overrideItem['photo']['path'] ?? '');
+                    if ($photoPath !== '' && !array_key_exists('src', $overrideItem)) {
+                        $relPath = ltrim(str_replace($folder, '', $photoPath), '/');
+                        $page['items'][$itemIndex]['src'] = $relPath !== ''
+                            ? '/photobook/asset/' . $hash . '/' . $relPath
+                            : null;
+                    }
+                } elseif ($overrideItem['photo'] === null) {
+                    $page['items'][$itemIndex]['photo'] = null;
+
+                    if (!array_key_exists('src', $overrideItem)) {
+                        $page['items'][$itemIndex]['src'] = null;
+                    }
+                }
+            }
+        }
+        return $page;
     }
 
     private function normalizeCoverOptions(array $options, array $coverMeta): array
