@@ -320,7 +320,7 @@ class BuildPhotoBook implements ShouldQueue
                         'objectPosition' => $item['objectPosition'] ?? 'center',
                     ];
                 }
-                $pagesForJson[] = [
+                $pageJson = [
                     'n'          => $idx,
                     'template'   => $page['template'] ?? 'generic',
                     'templateId' => $page['templateId'] ?? null,
@@ -337,6 +337,8 @@ class BuildPhotoBook implements ShouldQueue
                         $hash
                     );
                 }
+
+                $pagesForJson[] = $pageJson;
             }
 
             $pagesDoc = [
