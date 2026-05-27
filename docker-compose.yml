@@ -30,6 +30,9 @@ services:
       SESSION_DRIVER: file
       TRUSTED_PROXIES: "*"
       RUN_MIGRATIONS: "true"
+      NEXTCLOUD_BASE_URI: "${NEXTCLOUD_BASE_URI}"
+      NEXTCLOUD_USERNAME: "${NEXTCLOUD_USERNAME}"
+      NEXTCLOUD_PASSWORD: "${NEXTCLOUD_PASSWORD}"
     volumes:
       - photobook-storage:/var/www/html/storage
     restart: unless-stopped
@@ -56,6 +59,9 @@ services:
       SESSION_DRIVER: file
       TRUSTED_PROXIES: "*"
       RUN_MIGRATIONS: "false"
+      NEXTCLOUD_BASE_URI: "${NEXTCLOUD_BASE_URI}"
+      NEXTCLOUD_USERNAME: "${NEXTCLOUD_USERNAME}"
+      NEXTCLOUD_PASSWORD: "${NEXTCLOUD_PASSWORD}"
     volumes:
       - photobook-storage:/var/www/html/storage
     restart: unless-stopped
