@@ -1,0 +1,64 @@
+services:
+  photobook-nginx:
+    build:
+      context: .
+      target: nginx
+    depends_on:
+      - photobook-app
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - photobook-storage:/var/www/html/storage:ro
+    restart: unless-stopped
+
+  photobook-app:
+    build:
+      context: .
+      target: app
+    environment:
+      APP_NAME: Photobook
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_URL: http://127.0.0.1:8080
+      ASSET_URL: ""
+      LOG_CHANNEL: stderr
+      LOG_LEVEL: info
+      DB_CONNECTION: sqlite
+      DB_DATABASE: /var/www/html/storage/database/database.sqlite
+      QUEUE_CONNECTION: database
+      CACHE_STORE: file
+      SESSION_DRIVER: file
+      TRUSTED_PROXIES: "*"
+      RUN_MIGRATIONS: "true"
+    volumes:
+      - photobook-storage:/var/www/html/storage
+    restart: unless-stopped
+
+  photobook-worker:
+    build:
+      context: .
+      target: app
+    command: php artisan queue:work --queue=default --sleep=3 --tries=1 --timeout=1200
+    depends_on:
+      - photobook-app
+    environment:
+      APP_NAME: Photobook
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_URL: http://127.0.0.1:8080
+      ASSET_URL: ""
+      LOG_CHANNEL: stderr
+      LOG_LEVEL: info
+      DB_CONNECTION: sqlite
+      DB_DATABASE: /var/www/html/storage/database/database.sqlite
+      QUEUE_CONNECTION: database
+      CACHE_STORE: file
+      SESSION_DRIVER: file
+      TRUSTED_PROXIES: "*"
+      RUN_MIGRATIONS: "false"
+    volumes:
+      - photobook-storage:/var/www/html/storage
+    restart: unless-stopped
+
+volumes:
+  photobook-storage:
